@@ -43,7 +43,7 @@ class MainActivity : ComponentActivity() {
     private val green = Color.rgb(50, 220, 120)
     private val white = Color.rgb(245, 248, 246)
     private val muted = Color.rgb(155, 166, 158)
-    private val highlight = Color.rgb(35, 83, 53)
+    private val highlight = Color.rgb(35, 100, 55)
 
     private val executor = Executors.newSingleThreadExecutor()
 
@@ -623,6 +623,9 @@ class MainActivity : ComponentActivity() {
         statusText.text = "Copiando e lendo o PDF..."
         contentText.text = "Preparando o documento..."
         contentText.setTextColor(muted)
+        renderedDocument = null
+        backgroundHighlightSpan = null
+        foregroundHighlightSpan = null
 
         val originalName = getFileName(sourceUri)
 
@@ -1524,7 +1527,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // Prepara o documento uma única vez, em vez de recriá-lo a cada palavra.
+    // Prepara o documento uma única vez.
     private fun setDocumentTextView(text: String, color: Int) {
         val builder = SpannableStringBuilder(text)
 
@@ -1536,7 +1539,7 @@ class MainActivity : ComponentActivity() {
         contentText.setTextColor(color)
     }
 
-    // Remove somente os spans usados no destaque anterior.
+    // Remove apenas os spans usados no destaque anterior.
     private fun removeCurrentHighlight() {
         val text = renderedDocument ?: return
 
@@ -1552,6 +1555,7 @@ class MainActivity : ComponentActivity() {
         foregroundHighlightSpan = null
     }
 
+    // Marca a palavra/frase atual sem recriar o texto inteiro.
     private fun highlightPosition(start: Int, end: Int) {
         val text = renderedDocument ?: return
         if (text.isEmpty()) return
@@ -1560,11 +1564,10 @@ class MainActivity : ComponentActivity() {
         val b = end.coerceIn(a, text.length)
         if (b <= a) return
 
-        // Reutiliza o texto existente; não copia o PDF inteiro.
         removeCurrentHighlight()
 
         val backgroundSpan = BackgroundColorSpan(highlight)
-        val foregroundSpan = ForegroundColorSpan(green)
+        val foregroundSpan = ForegroundColorSpan(Color.WHITE)
 
         text.setSpan(
             backgroundSpan,
@@ -1582,11 +1585,19 @@ class MainActivity : ComponentActivity() {
         backgroundHighlightSpan = backgroundSpan
         foregroundHighlightSpan = foregroundSpan
 
+        // Reatribuir a mesma instância faz o TextView redesenhar a marcação.
+        contentText.text = text
+        contentText.invalidate()
+
         readingIndicator.text = "■  LENDO AGORA"
     }
 
     private fun clearHighlight() {
         removeCurrentHighlight()
+        if (renderedDocument != null) {
+            contentText.text = renderedDocument
+            contentText.invalidate()
+        }
     }
 
     private fun updateProgress() {
