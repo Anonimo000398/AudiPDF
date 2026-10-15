@@ -1,18 +1,28 @@
+
 package com.audipdf.app
 
-import android.app.Activity
-import android.os.Bundle
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
+import android.net.Uri
+import android.os.Bundle
+import android.provider.OpenableColumns
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.widget.Button
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
+import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
+import org.apache.pdfbox.pdmodel.PDDocument
+import org.apache.pdfbox.text.PDFTextStripper
+import java.util.concurrent.Executors
 
-class MainActivity : Activity() {
+class MainActivity : ComponentActivity() {
 
     private val backgroundColor = Color.rgb(10, 12, 11)
     private val panelColor = Color.rgb(23, 27, 24)
@@ -20,11 +30,27 @@ class MainActivity : Activity() {
     private val textColor = Color.rgb(245, 248, 246)
     private val mutedColor = Color.rgb(155, 166, 158)
 
+    private val executor = Executors.newSingleThreadExecutor()
+
+    private lateinit var statusText: TextView
+    private lateinit var fileNameText: TextView
+    private lateinit var contentText: TextView
+    private lateinit var importButton: Button
+
+    private val pdfPicker =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+            if (uri != null) {
+                importPdf(uri)
+            }
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         window.statusBarColor = backgroundColor
         window.navigationBarColor = backgroundColor
+
+        PDFBoxResourceLoader.init(applicationContext)
 
         val scrollView = ScrollView(this).apply {
             setBackgroundColor(backgroundColor)
@@ -33,11 +59,11 @@ class MainActivity : Activity() {
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(22), dp(20), dp(22), dp(28))
+            setPadding(dp(22), dp(20), dp(22), dp(30))
             setBackgroundColor(backgroundColor)
         }
 
-        // Cabeçalho com a logo oficial
+        // Cabeçalho com a logo
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -54,128 +80,218 @@ class MainActivity : Activity() {
             LinearLayout.LayoutParams(dp(58), dp(58))
         )
 
-        val brandText = LinearLayout(this).apply {
+        val brand = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), 0, 0, 0)
         }
 
-        brandText.addView(makeText(
-            "AudiPDF",
-            25f,
-            textColor,
-            true
-        ))
+        brand.addView(makeText("AudiPDF", 25f, textColor, true))
+        brand.addView(
+            makeText("SUA BIBLIOTECA EM ÁUDIO", 10f, greenColor, true).apply {
+                setPadding(0, dp(4), 0, 0)
+            }
+        )
 
-        brandText.addView(makeText(
-            "SUA BIBLIOTECA EM ÁUDIO",
-            10f,
-            greenColor,
-            true
-        ).apply {
-            setPadding(0, dp(4), 0, 0)
-        })
-
-        header.addView(brandText)
+        header.addView(brand)
         root.addView(header)
 
-        // Área de apresentação
-        val hero = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(24), dp(20), dp(24))
-            setBackgroundColor(panelColor)
-        }
+        // Apresentação
+        val hero = makePanel()
 
-        hero.addView(makeText(
-            "LEIA MENOS COM OS OLHOS.",
-            11f,
-            greenColor,
-            true
-        ))
+        hero.addView(makeText("SEUS DOCUMENTOS, SUA LIBERDADE", 10f, greenColor, true))
 
-        hero.addView(makeText(
-            "Seus PDFs.\nSua experiência de áudio.",
-            27f,
-            textColor,
-            true
-        ).apply {
-            setPadding(0, dp(12), 0, dp(12))
-        })
+        hero.addView(
+            makeText(
+                "Transforme seus PDFs em conhecimento.",
+                26f,
+                textColor,
+                true
+            ).apply {
+                setPadding(0, dp(12), 0, dp(10))
+            }
+        )
 
-        hero.addView(makeText(
-            "Transforme seus documentos em uma experiência de leitura mais prática. Importe um PDF e prepare-se para ouvir.",
-            14f,
-            mutedColor
-        ))
+        hero.addView(
+            makeText(
+                "Importe um documento e extraia o texto para preparar sua experiência de leitura em áudio.",
+                14f,
+                mutedColor
+            )
+        )
 
-        root.addView(hero, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
-        ).apply {
-            topMargin = dp(28)
-        })
+        root.addView(
+            hero,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(26)
+            }
+        )
 
         // Biblioteca
-        root.addView(makeText(
-            "Sua biblioteca",
-            22f,
-            textColor,
-            true
-        ).apply {
-            setPadding(0, dp(30), 0, dp(14))
-        })
+        root.addView(
+            makeText("Sua biblioteca", 22f, textColor, true).apply {
+                setPadding(0, dp(28), 0, dp(14))
+            }
+        )
 
-        val library = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding(dp(18), dp(28), dp(18), dp(28))
-            setBackgroundColor(panelColor)
-        }
+        val library = makePanel()
 
-        val musicSymbol = makeText(
-            "♫",
-            42f,
-            greenColor,
-            true
-        ).apply {
-            gravity = Gravity.CENTER
-        }
+        library.addView(makeText("DOCUMENTO ATUAL", 10f, greenColor, true))
 
-        library.addView(musicSymbol)
-
-        library.addView(makeText(
-            "Sua próxima leitura começa aqui",
+        fileNameText = makeText(
+            "Nenhum PDF selecionado",
             17f,
             textColor,
             true
         ).apply {
-            gravity = Gravity.CENTER
-            setPadding(0, dp(12), 0, dp(8))
-        })
+            setPadding(0, dp(10), 0, dp(8))
+        }
 
-        library.addView(makeText(
-            "Seus documentos aparecerão nesta biblioteca.",
+        library.addView(fileNameText)
+
+        statusText = makeText(
+            "Escolha um PDF para começar.",
             13f,
             mutedColor
         ).apply {
-            gravity = Gravity.CENTER
-        })
+            setPadding(0, 0, 0, dp(16))
+        }
+
+        library.addView(statusText)
+
+        importButton = Button(this).apply {
+            text = "＋  Importar PDF"
+            textSize = 15f
+            isAllCaps = false
+            setTextColor(Color.rgb(8, 20, 12))
+            typeface = Typeface.DEFAULT_BOLD
+            background = roundedBackground(greenColor, 14)
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+
+            setOnClickListener {
+                pdfPicker.launch(arrayOf("application/pdf"))
+            }
+        }
+
+        library.addView(
+            importButton,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(54)
+            )
+        )
 
         root.addView(library)
 
-        val footer = makeText(
-            "FOCO  •  CONHECIMENTO  •  LIBERDADE",
-            10f,
-            mutedColor,
-            true
+        // Texto extraído
+        root.addView(
+            makeText("Conteúdo do documento", 21f, textColor, true).apply {
+                setPadding(0, dp(28), 0, dp(14))
+            }
+        )
+
+        val contentPanel = makePanel()
+
+        contentText = makeText(
+            "O texto do PDF aparecerá aqui depois da importação.",
+            14f,
+            mutedColor
         ).apply {
-            gravity = Gravity.CENTER
-            setPadding(0, dp(26), 0, 0)
+            textIsSelectable = true
+            setLineSpacing(dp(5).toFloat(), 1f)
         }
 
-        root.addView(footer)
+        contentPanel.addView(contentText)
+        root.addView(contentPanel)
+
+        root.addView(
+            makeText(
+                "FOCO  •  CONHECIMENTO  •  LIBERDADE",
+                10f,
+                mutedColor,
+                true
+            ).apply {
+                gravity = Gravity.CENTER
+                setPadding(0, dp(28), 0, 0)
+            }
+        )
 
         scrollView.addView(root)
         setContentView(scrollView)
+    }
+
+    private fun importPdf(uri: Uri) {
+        fileNameText.text = getFileName(uri)
+        statusText.text = "Lendo o documento..."
+        contentText.text = "Extraindo texto do PDF. Aguarde..."
+        importButton.isEnabled = false
+
+        executor.execute {
+            try {
+                val extractedText = contentResolver.openInputStream(uri)?.use { input ->
+                    PDDocument.load(input).use { document ->
+                        PDFTextStripper().getText(document)
+                    }
+                } ?: throw IllegalStateException("Não foi possível abrir o arquivo.")
+
+                runOnUiThread {
+                    importButton.isEnabled = true
+
+                    if (extractedText.isBlank()) {
+                        statusText.text = "PDF aberto, mas nenhum texto foi encontrado."
+                        contentText.text =
+                            "Este documento pode conter apenas páginas digitalizadas como imagens. O reconhecimento de texto (OCR) ainda não está implementado."
+                    } else {
+                        val wordCount = extractedText
+                            .trim()
+                            .split(Regex("\\s+"))
+                            .size
+
+                        statusText.text =
+                            "Texto extraído com sucesso • ${documentWordCount(wordCount)} palavras"
+
+                        contentText.text = extractedText.trim()
+                        contentText.setTextColor(textColor)
+                    }
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    importButton.isEnabled = true
+                    statusText.text = "Não foi possível ler este PDF."
+                    contentText.text =
+                        "Verifique se o arquivo é válido e tente novamente.\n\nDetalhes: ${e.localizedMessage ?: "erro desconhecido"}"
+                    contentText.setTextColor(mutedColor)
+                }
+            }
+        }
+    }
+
+    private fun getFileName(uri: Uri): String {
+        var name = "Documento PDF"
+
+        contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+            val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+
+            if (cursor.moveToFirst() && nameIndex >= 0) {
+                name = cursor.getString(nameIndex) ?: name
+            }
+        }
+
+        return name
+    }
+
+    private fun documentWordCount(count: Int): String {
+        return if (count == 1) "1 palavra" else "$count palavras"
+    }
+
+    private fun makePanel(): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(20), dp(18), dp(20))
+            background = roundedBackground(panelColor, 18)
+        }
     }
 
     private fun makeText(
@@ -188,14 +304,28 @@ class MainActivity : Activity() {
             text = value
             textSize = size
             setTextColor(color)
+
             if (bold) {
                 typeface = Typeface.DEFAULT_BOLD
             }
+
             setLineSpacing(dp(3).toFloat(), 1f)
+        }
+    }
+
+    private fun roundedBackground(color: Int, radius: Int): GradientDrawable {
+        return GradientDrawable().apply {
+            setColor(color)
+            cornerRadius = dp(radius).toFloat()
         }
     }
 
     private fun dp(value: Int): Int {
         return (value * resources.displayMetrics.density).toInt()
+    }
+
+    override fun onDestroy() {
+        executor.shutdown()
+        super.onDestroy()
     }
 }
