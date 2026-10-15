@@ -7,6 +7,7 @@ import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
+import android.os.SystemClock
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.text.SpannableStringBuilder
@@ -104,6 +105,10 @@ class MainActivity : ComponentActivity() {
     private var renderedDocument: SpannableStringBuilder? = null
     private var backgroundHighlightSpan: BackgroundColorSpan? = null
     private var foregroundHighlightSpan: ForegroundColorSpan? = null
+
+    // Limita a frequência de atualização do destaque.
+    private var lastHighlightUpdateMs = 0L
+    private val highlightUpdateIntervalMs = 100L
 
     private data class SpeechChunk(
         val text: String,
@@ -626,6 +631,7 @@ class MainActivity : ComponentActivity() {
         renderedDocument = null
         backgroundHighlightSpan = null
         foregroundHighlightSpan = null
+        lastHighlightUpdateMs = 0L
 
         val originalName = getFileName(sourceUri)
 
@@ -1534,6 +1540,7 @@ class MainActivity : ComponentActivity() {
         renderedDocument = builder
         backgroundHighlightSpan = null
         foregroundHighlightSpan = null
+        lastHighlightUpdateMs = 0L
 
         contentText.text = builder
         contentText.setTextColor(color)
@@ -1555,7 +1562,7 @@ class MainActivity : ComponentActivity() {
         foregroundHighlightSpan = null
     }
 
-    // Marca a palavra/frase atual sem recriar o texto inteiro.
+    // Atualiza o destaque com intervalo mínimo para reduzir travamentos.
     private fun highlightPosition(start: Int, end: Int) {
         val text = renderedDocument ?: return
         if (text.isEmpty()) return
@@ -1564,10 +1571,14 @@ class MainActivity : ComponentActivity() {
         val b = end.coerceIn(a, text.length)
         if (b <= a) return
 
+        val now = SystemClock.uptimeMillis()
+        if (now - lastHighlightUpdateMs < highlightUpdateIntervalMs) return
+        lastHighlightUpdateMs = now
+
         removeCurrentHighlight()
 
+        // Um único span reduz o trabalho de atualização visual.
         val backgroundSpan = BackgroundColorSpan(highlight)
-        val foregroundSpan = ForegroundColorSpan(Color.WHITE)
 
         text.setSpan(
             backgroundSpan,
@@ -1575,18 +1586,11 @@ class MainActivity : ComponentActivity() {
             b,
             Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
         )
-        text.setSpan(
-            foregroundSpan,
-            a,
-            b,
-            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
-        )
 
         backgroundHighlightSpan = backgroundSpan
-        foregroundHighlightSpan = foregroundSpan
+        foregroundHighlightSpan = null
 
-        // Reatribuir a mesma instância faz o TextView redesenhar a marcação.
-        contentText.text = text
+        // Não reatribui o documento inteiro: o span atualiza a marcação.
         contentText.invalidate()
 
         readingIndicator.text = "■  LENDO AGORA"
@@ -1595,7 +1599,6 @@ class MainActivity : ComponentActivity() {
     private fun clearHighlight() {
         removeCurrentHighlight()
         if (renderedDocument != null) {
-            contentText.text = renderedDocument
             contentText.invalidate()
         }
     }
