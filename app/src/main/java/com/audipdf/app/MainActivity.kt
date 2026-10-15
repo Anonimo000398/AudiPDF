@@ -9,8 +9,11 @@ import android.os.Bundle
 import android.provider.OpenableColumns
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.style.BackgroundColorSpan
+import android.text.style.ForegroundColorSpan
 import android.view.Gravity
-import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.ImageView
@@ -34,6 +37,7 @@ class MainActivity : ComponentActivity() {
     private val greenColor = Color.rgb(50, 220, 120)
     private val textColor = Color.rgb(245, 248, 246)
     private val mutedColor = Color.rgb(155, 166, 158)
+    private val highlightColor = Color.rgb(35, 83, 53)
 
     private val executor = Executors.newSingleThreadExecutor()
 
@@ -46,6 +50,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var progressText: TextView
     private lateinit var speedText: TextView
     private lateinit var voiceButton: Button
+    private lateinit var readingIndicator: TextView
 
     private var tts: TextToSpeech? = null
     private var ttsReady = false
@@ -53,11 +58,12 @@ class MainActivity : ComponentActivity() {
     private var isPaused = false
 
     private var documentText = ""
-    private var chunks = listOf<String>()
+    private var chunks = listOf<SpeechChunk>()
     private var currentChunkIndex = 0
     private var currentCharOffset = 0
     private var activeUtteranceId = ""
     private var sessionId = 0
+    private var utteranceBaseOffset = 0
 
     private var speechRate = 1.0f
     private val speeds = listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f)
@@ -65,6 +71,12 @@ class MainActivity : ComponentActivity() {
 
     private var availableVoices = listOf<android.speech.tts.Voice>()
     private var voiceIndex = 0
+
+    private data class SpeechChunk(
+        val text: String,
+        val start: Int,
+        val end: Int
+    )
 
     private val pdfPicker =
         registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
@@ -160,7 +172,6 @@ class MainActivity : ComponentActivity() {
         )
 
         val library = makePanel()
-
         library.addView(makeText("DOCUMENTO ATUAL", 10f, greenColor, true))
 
         fileNameText = makeText(
@@ -211,7 +222,7 @@ class MainActivity : ComponentActivity() {
 
         player.addView(
             makeText(
-                "A voz usa o mecanismo de síntese de fala do Android.",
+                "Acompanhe o texto enquanto a voz faz a leitura.",
                 12f,
                 mutedColor
             )
@@ -220,8 +231,10 @@ class MainActivity : ComponentActivity() {
         progressBar = SeekBar(this).apply {
             max = 1
             progress = 0
-            progressTintList = android.content.res.ColorStateList.valueOf(greenColor)
-            thumbTintList = android.content.res.ColorStateList.valueOf(greenColor)
+            progressTintList =
+                android.content.res.ColorStateList.valueOf(greenColor)
+            thumbTintList =
+                android.content.res.ColorStateList.valueOf(greenColor)
             isEnabled = false
         }
 
@@ -244,11 +257,12 @@ class MainActivity : ComponentActivity() {
                 val resumeAfterSeek = isPlaying
                 stopSpeech()
 
-                currentChunkIndex = progressBar.progress.coerceIn(0, chunks.lastIndex)
+                currentChunkIndex =
+                    progressBar.progress.coerceIn(0, chunks.lastIndex)
                 currentCharOffset = 0
-                isPaused = false
 
                 updateProgress()
+                clearReadingHighlight()
 
                 if (resumeAfterSeek) {
                     startSpeech()
@@ -271,19 +285,16 @@ class MainActivity : ComponentActivity() {
         progressText = makeText("Nenhum trecho carregado", 12f, mutedColor)
         player.addView(progressText)
 
-        // Controles de reprodução
         val controls = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
             setPadding(0, dp(16), 0, dp(8))
         }
 
-        val backButton = makeButton("−15s", panelColor, textColor) {
-            moveChunk(-1)
-        }
-
         controls.addView(
-            backButton,
+            makeButton("−1 trecho", panelColor, textColor) {
+                moveChunk(-1)
+            },
             LinearLayout.LayoutParams(0, dp(48), 1f).apply {
                 marginEnd = dp(6)
             }
@@ -300,12 +311,10 @@ class MainActivity : ComponentActivity() {
             }
         )
 
-        val forwardButton = makeButton("+15s", panelColor, textColor) {
-            moveChunk(1)
-        }
-
         controls.addView(
-            forwardButton,
+            makeButton("+1 trecho", panelColor, textColor) {
+                moveChunk(1)
+            },
             LinearLayout.LayoutParams(0, dp(48), 1f)
         )
 
@@ -325,23 +334,19 @@ class MainActivity : ComponentActivity() {
             gravity = Gravity.CENTER
         }
 
-        val slowerButton = makeButton("−", panelColor, textColor) {
-            changeSpeed(-1)
-        }
-
         speedRow.addView(
-            slowerButton,
+            makeButton("−", panelColor, textColor) {
+                changeSpeed(-1)
+            },
             LinearLayout.LayoutParams(0, dp(44), 1f).apply {
                 marginEnd = dp(8)
             }
         )
 
-        val fasterButton = makeButton("+", panelColor, textColor) {
-            changeSpeed(1)
-        }
-
         speedRow.addView(
-            fasterButton,
+            makeButton("+", panelColor, textColor) {
+                changeSpeed(1)
+            },
             LinearLayout.LayoutParams(0, dp(44), 1f)
         )
 
@@ -371,26 +376,56 @@ class MainActivity : ComponentActivity() {
 
         root.addView(player)
 
-        // Texto extraído
+        // Área de leitura organizada
         root.addView(
-            makeText("Conteúdo do documento", 21f, textColor, true).apply {
-                setPadding(0, dp(26), 0, dp(14))
+            makeText("Leitura do documento", 22f, textColor, true).apply {
+                setPadding(0, dp(28), 0, dp(8))
             }
         )
 
-        val contentPanel = makePanel()
+        root.addView(
+            makeText(
+                "Parágrafos organizados para acompanhar a narração.",
+                13f,
+                mutedColor
+            ).apply {
+                setPadding(0, 0, 0, dp(14))
+            }
+        )
+
+        val readingPanel = makePanel()
+
+        readingIndicator = makeText(
+            "■  PRONTO PARA LER",
+            11f,
+            greenColor,
+            true
+        ).apply {
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+            background = roundedBackground(Color.rgb(20, 48, 31), 8)
+        }
+
+        readingPanel.addView(
+            readingIndicator,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = dp(16)
+            }
+        )
 
         contentText = makeText(
-            "O texto do PDF aparecerá aqui depois da importação.",
-            14f,
+            "Importe um PDF para visualizar o texto organizado aqui.",
+            15f,
             mutedColor
         ).apply {
             setTextIsSelectable(true)
-            setLineSpacing(dp(5).toFloat(), 1f)
+            setLineSpacing(dp(7).toFloat(), 1.08f)
         }
 
-        contentPanel.addView(contentText)
-        root.addView(contentPanel)
+        readingPanel.addView(contentText)
+        root.addView(readingPanel)
 
         root.addView(
             makeText(
@@ -419,7 +454,6 @@ class MainActivity : ComponentActivity() {
                 }
 
                 val engine = tts ?: return@runOnUiThread
-
                 val languageResult = engine.setLanguage(Locale("pt", "BR"))
 
                 if (languageResult == TextToSpeech.LANG_MISSING_DATA ||
@@ -464,15 +498,23 @@ class MainActivity : ComponentActivity() {
                             frame: Int
                         ) {
                             runOnUiThread {
-                                if (utteranceId == activeUtteranceId &&
-                                    currentChunkIndex in chunks.indices
-                                ) {
-                                    currentCharOffset = (
-                                        utteranceBaseOffset + end
-                                    ).coerceAtMost(
-                                        chunks[currentChunkIndex].length
-                                    )
-                                }
+                                if (utteranceId != activeUtteranceId ||
+                                    currentChunkIndex !in chunks.indices
+                                ) return@runOnUiThread
+
+                                val chunk = chunks[currentChunkIndex]
+                                val absoluteStart =
+                                    (chunk.start + utteranceBaseOffset + start)
+                                        .coerceIn(0, documentText.length)
+
+                                val absoluteEnd =
+                                    (chunk.start + utteranceBaseOffset + end)
+                                        .coerceIn(absoluteStart, documentText.length)
+
+                                currentCharOffset = (utteranceBaseOffset + end)
+                                    .coerceIn(0, chunk.text.length)
+
+                                highlightReadingPosition(absoluteStart, absoluteEnd)
                             }
                         }
 
@@ -490,7 +532,7 @@ class MainActivity : ComponentActivity() {
                                     isPaused = false
                                     playButton.text = "▶  Play"
                                     statusText.text = "Leitura concluída."
-                                    currentChunkIndex = chunks.lastIndex.coerceAtLeast(0)
+                                    readingIndicator.text = "■  LEITURA CONCLUÍDA"
                                     updateProgress()
                                 } else {
                                     updateProgress()
@@ -505,14 +547,12 @@ class MainActivity : ComponentActivity() {
                                     isPlaying = false
                                     playButton.text = "▶  Play"
                                     statusText.text = "Erro durante a narração."
+                                    readingIndicator.text = "■  ERRO NA NARRAÇÃO"
                                 }
                             }
                         }
 
-                        override fun onError(
-                            utteranceId: String?,
-                            errorCode: Int
-                        ) {
+                        override fun onError(utteranceId: String?, errorCode: Int) {
                             onError(utteranceId)
                         }
                     }
@@ -523,9 +563,6 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-
-    // Base do trecho atual dentro do texto, para retomar após pausar.
-    private var utteranceBaseOffset = 0
 
     private fun importPdf(uri: Uri) {
         stopSpeech()
@@ -544,9 +581,11 @@ class MainActivity : ComponentActivity() {
                     }
                 } ?: throw IllegalStateException("Não foi possível abrir o arquivo.")
 
+                val organizedText = formatDocumentText(extractedText)
+
                 runOnUiThread {
                     importButton.isEnabled = true
-                    documentText = extractedText.trim()
+                    documentText = organizedText
 
                     if (documentText.isBlank()) {
                         chunks = emptyList()
@@ -558,6 +597,7 @@ class MainActivity : ComponentActivity() {
                         contentText.text =
                             "O documento pode conter páginas digitalizadas como imagens. OCR ainda não está implementado."
                         contentText.setTextColor(mutedColor)
+                        readingIndicator.text = "■  SEM TEXTO DISPONÍVEL"
                         updateProgress()
                     } else {
                         chunks = splitIntoChunks(documentText)
@@ -569,12 +609,10 @@ class MainActivity : ComponentActivity() {
 
                         val words = documentText.split(Regex("\\s+")).size
                         statusText.text = "PDF pronto • $words palavras"
-
-                        progressBar.max = (chunks.size - 1).coerceAtLeast(1)
-                        progressBar.progress = 0
-                        progressBar.isEnabled = chunks.isNotEmpty()
+                        readingIndicator.text = "■  PRONTO PARA LER"
 
                         updateProgress()
+                        clearReadingHighlight()
 
                         if (!ttsReady) {
                             statusText.text = "PDF pronto. Aguardando a voz do Android..."
@@ -588,36 +626,89 @@ class MainActivity : ComponentActivity() {
                     contentText.text =
                         "Verifique se o arquivo é válido e tente novamente.\n\nDetalhes: ${e.localizedMessage ?: "erro desconhecido"}"
                     contentText.setTextColor(mutedColor)
+                    readingIndicator.text = "■  ERRO AO ABRIR PDF"
                 }
             }
         }
     }
 
-    private fun splitIntoChunks(text: String): List<String> {
-        val result = mutableListOf<String>()
+    private fun formatDocumentText(rawText: String): String {
+        val normalized = rawText
+            .replace("\r\n", "\n")
+            .replace('\r', '\n')
+            .replace('\u0000', ' ')
+
+        val output = StringBuilder()
+        val paragraph = StringBuilder()
+
+        fun flushParagraph() {
+            val value = paragraph.toString().trim()
+            if (value.isNotEmpty()) {
+                if (output.isNotEmpty()) output.append("\n\n")
+                output.append(value)
+            }
+            paragraph.clear()
+        }
+
+        normalized.lines().forEach { rawLine ->
+            val line = rawLine.replace(Regex("[\\t ]+"), " ").trim()
+
+            if (line.isEmpty()) {
+                flushParagraph()
+            } else {
+                if (paragraph.isNotEmpty()) paragraph.append(' ')
+                paragraph.append(line)
+            }
+        }
+
+        flushParagraph()
+        return output.toString().trim()
+    }
+
+    private fun splitIntoChunks(text: String): List<SpeechChunk> {
+        val result = mutableListOf<SpeechChunk>()
+        val maxLength = 1000
         var start = 0
-        val maxLength = 1800
 
         while (start < text.length) {
+            while (start < text.length && text[start].isWhitespace()) start++
+            if (start >= text.length) break
+
             var end = (start + maxLength).coerceAtMost(text.length)
 
             if (end < text.length) {
-                val space = text.lastIndexOf(' ', end)
-                val newline = text.lastIndexOf('\n', end)
-                val boundary = maxOf(space, newline)
-
-                if (boundary > start + maxLength / 2) {
-                    end = boundary
+                val paragraphBreak = text.lastIndexOf("\n\n", end)
+                val sentenceBreak = maxOf(
+                    text.lastIndexOf(". ", end),
+                    text.lastIndexOf("! ", end),
+                    text.lastIndexOf("? ", end),
+                    text.lastIndexOf('\n', end)
+                )
+                val spaceBreak = text.lastIndexOf(' ', end)
+                val bestBreak = when {
+                    paragraphBreak > start + maxLength / 2 -> paragraphBreak
+                    sentenceBreak > start + maxLength / 2 -> sentenceBreak + 1
+                    spaceBreak > start + maxLength / 2 -> spaceBreak
+                    else -> end
                 }
+                end = bestBreak.coerceAtLeast(start + 1)
             }
 
-            val part = text.substring(start, end).trim()
-            if (part.isNotEmpty()) result.add(part)
+            while (end > start && text[end - 1].isWhitespace()) end--
+
+            if (end <= start) {
+                end = (start + maxLength).coerceAtMost(text.length)
+            }
+
+            result.add(
+                SpeechChunk(
+                    text = text.substring(start, end),
+                    start = start,
+                    end = end
+                )
+            )
 
             start = end
-            while (start < text.length && text[start].isWhitespace()) {
-                start++
-            }
         }
 
         return result
@@ -641,7 +732,6 @@ class MainActivity : ComponentActivity() {
                 currentChunkIndex = 0
                 currentCharOffset = 0
             }
-
             startSpeech()
         }
     }
@@ -653,17 +743,19 @@ class MainActivity : ComponentActivity() {
         isPaused = false
         playButton.text = "Ⅱ  Pause"
         statusText.text = "Narrando..."
+        readingIndicator.text = "■  LENDO AGORA"
         speakCurrentChunk()
     }
 
     private fun pauseSpeech() {
-        // onRangeStart guarda a posição aproximada da última palavra pronunciada.
         isPlaying = false
         isPaused = true
         sessionId++
         tts?.stop()
+        activeUtteranceId = ""
         playButton.text = "▶  Continuar"
         statusText.text = "Leitura pausada."
+        readingIndicator.text = "■  LEITURA PAUSADA"
     }
 
     private fun stopSpeech() {
@@ -678,40 +770,41 @@ class MainActivity : ComponentActivity() {
         if (::playButton.isInitialized) {
             playButton.text = "▶  Play"
         }
+        if (::readingIndicator.isInitialized) {
+            readingIndicator.text = "■  PRONTO PARA LER"
+        }
     }
 
     private fun speakCurrentChunk() {
         val engine = tts ?: return
-
-        if (!ttsReady || !isPlaying || currentChunkIndex !in chunks.indices) {
-            return
-        }
+        if (!ttsReady || !isPlaying || currentChunkIndex !in chunks.indices) return
 
         val chunk = chunks[currentChunkIndex]
-        val baseOffset = currentCharOffset.coerceIn(0, chunk.length)
+        val baseOffset = currentCharOffset.coerceIn(0, chunk.text.length)
 
-        if (baseOffset >= chunk.length) {
+        if (baseOffset >= chunk.text.length) {
             currentChunkIndex++
+            currentCharOffset = 0
 
             if (currentChunkIndex < chunks.size) {
-                currentCharOffset = 0
                 updateProgress()
                 speakCurrentChunk()
             } else {
                 isPlaying = false
                 playButton.text = "▶  Play"
                 statusText.text = "Leitura concluída."
+                readingIndicator.text = "■  LEITURA CONCLUÍDA"
             }
-
             return
         }
 
         utteranceBaseOffset = baseOffset
-        activeUtteranceId = "audi_${sessionId}_${currentChunkIndex}_${System.nanoTime()}"
+        activeUtteranceId =
+            "audi_${sessionId}_${currentChunkIndex}_${System.nanoTime()}"
 
         engine.setSpeechRate(speechRate)
         engine.speak(
-            chunk.substring(baseOffset),
+            chunk.text.substring(baseOffset),
             TextToSpeech.QUEUE_FLUSH,
             null,
             activeUtteranceId
@@ -731,33 +824,20 @@ class MainActivity : ComponentActivity() {
 
         currentChunkIndex = (currentChunkIndex + direction)
             .coerceIn(0, chunks.lastIndex)
-
         currentCharOffset = 0
-        updateProgress()
 
+        updateProgress()
+        clearReadingHighlight()
         statusText.text = "Trecho ${currentChunkIndex + 1} selecionado."
 
-        if (resumeAfterMove) {
-            startSpeech()
-        }
+        if (resumeAfterMove) startSpeech()
     }
 
     private fun changeSpeed(direction: Int) {
         speedIndex = (speedIndex + direction).coerceIn(0, speeds.lastIndex)
         speechRate = speeds[speedIndex]
-
         tts?.setSpeechRate(speechRate)
-
         speedText.text = "${speechRate.toString().replace('.', ',')}×"
-
-        if (isPlaying) {
-            // A nova velocidade vale para o próximo trecho pronunciado.
-            Toast.makeText(
-                this,
-                "Velocidade atualizada para ${speedText.text}",
-                Toast.LENGTH_SHORT
-            ).show()
-        }
     }
 
     private fun changeVoice() {
@@ -785,6 +865,36 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun highlightReadingPosition(start: Int, end: Int) {
+        if (documentText.isEmpty()) return
+
+        val safeStart = start.coerceIn(0, documentText.length)
+        val safeEnd = end.coerceIn(safeStart, documentText.length)
+        if (safeEnd <= safeStart) return
+
+        val spannable = SpannableString(documentText)
+        spannable.setSpan(
+            BackgroundColorSpan(highlightColor),
+            safeStart,
+            safeEnd,
+            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+        )
+        spannable.setSpan(
+            ForegroundColorSpan(greenColor),
+            safeStart,
+            safeEnd,
+            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+        )
+
+        contentText.text = spannable
+        readingIndicator.text = "■  LENDO AGORA"
+    }
+
+    private fun clearReadingHighlight() {
+        if (!::contentText.isInitialized) return
+        contentText.text = documentText
+    }
+
     private fun updateProgress() {
         if (chunks.isEmpty()) {
             progressBar.max = 1
@@ -797,9 +907,7 @@ class MainActivity : ComponentActivity() {
         progressBar.max = (chunks.size - 1).coerceAtLeast(1)
         progressBar.progress = currentChunkIndex.coerceIn(0, progressBar.max)
         progressBar.isEnabled = chunks.size > 1
-
-        progressText.text =
-            "Trecho ${currentChunkIndex + 1} de ${chunks.size}"
+        progressText.text = "Trecho ${currentChunkIndex + 1} de ${chunks.size}"
     }
 
     private fun getFileName(uri: Uri): String {
@@ -807,7 +915,6 @@ class MainActivity : ComponentActivity() {
 
         contentResolver.query(uri, null, null, null, null)?.use { cursor ->
             val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-
             if (cursor.moveToFirst() && index >= 0) {
                 name = cursor.getString(index) ?: name
             }
@@ -826,7 +933,7 @@ class MainActivity : ComponentActivity() {
 
     private fun makeButton(
         label: String,
-        backgroundColor: Int,
+        buttonColor: Int,
         foregroundColor: Int,
         action: () -> Unit
     ): Button {
@@ -836,7 +943,7 @@ class MainActivity : ComponentActivity() {
             isAllCaps = false
             setTextColor(foregroundColor)
             typeface = Typeface.DEFAULT_BOLD
-            background = roundedBackground(backgroundColor, 14)
+            background = roundedBackground(buttonColor, 14)
             setPadding(dp(8), dp(6), dp(8), dp(6))
             setOnClickListener { action() }
         }
@@ -852,19 +959,12 @@ class MainActivity : ComponentActivity() {
             text = value
             textSize = size
             setTextColor(color)
-
-            if (bold) {
-                typeface = Typeface.DEFAULT_BOLD
-            }
-
+            if (bold) typeface = Typeface.DEFAULT_BOLD
             setLineSpacing(dp(3).toFloat(), 1f)
         }
     }
 
-    private fun roundedBackground(
-        color: Int,
-        radius: Int
-    ): GradientDrawable {
+    private fun roundedBackground(color: Int, radius: Int): GradientDrawable {
         return GradientDrawable().apply {
             setColor(color)
             cornerRadius = dp(radius).toFloat()
