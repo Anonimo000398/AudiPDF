@@ -1,3 +1,4 @@
+
 package com.audipdf.app
 
 import android.app.AlertDialog
@@ -8,7 +9,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
-import android.text.SpannableString
+import android.text.SpannableStringBuilder
 import android.text.Spanned
 import android.text.style.BackgroundColorSpan
 import android.text.style.ForegroundColorSpan
@@ -62,8 +63,6 @@ class MainActivity : ComponentActivity() {
     private lateinit var librarySummary: TextView
     private lateinit var homeTab: Button
     private lateinit var libraryTab: Button
-
-    // Novo controle para selecionar o trecho sem alterar o design existente.
     private lateinit var rangeButton: Button
 
     private lateinit var appFolder: File
@@ -95,12 +94,16 @@ class MainActivity : ComponentActivity() {
     private var lastSavedOffset = -1
     private var savedBooks = mutableListOf<BookProgress>()
 
-    // Novos dados para identificar páginas e capítulos.
     private var pageRanges = listOf<PageRange>()
     private var chapterRanges = listOf<ChapterRange>()
     private var activeRangeStart = 0
     private var activeRangeEnd = 0
     private var activeRangeLabel = "Sem limite"
+
+    // O texto é preparado uma vez e reutilizado durante toda a narração.
+    private var renderedDocument: SpannableStringBuilder? = null
+    private var backgroundHighlightSpan: BackgroundColorSpan? = null
+    private var foregroundHighlightSpan: ForegroundColorSpan? = null
 
     private data class SpeechChunk(
         val text: String,
@@ -268,7 +271,6 @@ class MainActivity : ComponentActivity() {
         homeContent.addView(sectionTitle("Documento atual"))
 
         val documentPanel = makePanel()
-
         fileNameText = makeText("Nenhum PDF selecionado", 17f, white, true)
         statusText = makeText("Preparando o AudiPDF...", 13f, muted)
 
@@ -291,7 +293,6 @@ class MainActivity : ComponentActivity() {
                 setPadding(0, dp(8), 0, 0)
             }
         )
-
         homeContent.addView(documentPanel)
 
         homeContent.addView(sectionTitle("Player AudiPDF"))
@@ -308,12 +309,7 @@ class MainActivity : ComponentActivity() {
             }
         )
 
-        // Único controle visual adicionado: seleção do trecho de leitura.
-        rangeButton = makeButton(
-            "Trecho: Sem limite",
-            panel,
-            white
-        ) {
+        rangeButton = makeButton("Trecho: Sem limite", panel, white) {
             showRangeDialog()
         }
         player.addView(rangeButton, topMargin(12))
@@ -321,10 +317,8 @@ class MainActivity : ComponentActivity() {
         seekBar = SeekBar(this).apply {
             max = 1
             progress = 0
-            progressTintList =
-                android.content.res.ColorStateList.valueOf(green)
-            thumbTintList =
-                android.content.res.ColorStateList.valueOf(green)
+            progressTintList = android.content.res.ColorStateList.valueOf(green)
+            thumbTintList = android.content.res.ColorStateList.valueOf(green)
             isEnabled = false
         }
 
@@ -365,9 +359,7 @@ class MainActivity : ComponentActivity() {
         }
 
         controls.addView(
-            makeButton("−1 trecho", panel, white) {
-                moveChunk(-1)
-            },
+            makeButton("−1 trecho", panel, white) { moveChunk(-1) },
             LinearLayout.LayoutParams(0, dp(48), 1f).apply {
                 marginEnd = dp(5)
             }
@@ -385,12 +377,9 @@ class MainActivity : ComponentActivity() {
         )
 
         controls.addView(
-            makeButton("+1 trecho", panel, white) {
-                moveChunk(1)
-            },
+            makeButton("+1 trecho", panel, white) { moveChunk(1) },
             LinearLayout.LayoutParams(0, dp(48), 1f)
         )
-
         player.addView(controls)
 
         player.addView(
@@ -407,21 +396,16 @@ class MainActivity : ComponentActivity() {
         }
 
         speedControls.addView(
-            makeButton("−", panel, white) {
-                changeSpeed(-1)
-            },
+            makeButton("−", panel, white) { changeSpeed(-1) },
             LinearLayout.LayoutParams(0, dp(44), 1f).apply {
                 marginEnd = dp(8)
             }
         )
 
         speedControls.addView(
-            makeButton("+", panel, white) {
-                changeSpeed(1)
-            },
+            makeButton("+", panel, white) { changeSpeed(1) },
             LinearLayout.LayoutParams(0, dp(44), 1f)
         )
-
         player.addView(speedControls, topMargin(8))
 
         voiceButton = makeButton("Voz: carregando...", panel, white) {
@@ -430,7 +414,6 @@ class MainActivity : ComponentActivity() {
         player.addView(voiceButton, topMargin(10))
 
         homeContent.addView(player)
-
         homeContent.addView(sectionTitle("Leitura do documento"))
 
         val reading = makePanel()
@@ -439,7 +422,6 @@ class MainActivity : ComponentActivity() {
             setPadding(dp(10), dp(8), dp(10), dp(8))
             background = rounded(Color.rgb(20, 48, 31), 8)
         }
-
         reading.addView(readingIndicator, bottomMargin(14))
 
         contentText = makeText(
@@ -455,12 +437,7 @@ class MainActivity : ComponentActivity() {
         homeContent.addView(reading)
 
         homeContent.addView(
-            makeText(
-                "FOCO  •  CONHECIMENTO  •  LIBERDADE",
-                10f,
-                muted,
-                true
-            ).apply {
+            makeText("FOCO  •  CONHECIMENTO  •  LIBERDADE", 10f, muted, true).apply {
                 gravity = Gravity.CENTER
                 setPadding(0, dp(24), 0, 0)
             }
@@ -543,7 +520,6 @@ class MainActivity : ComponentActivity() {
                     val br = voices.indexOfFirst {
                         it.locale.country.equals("BR", true)
                     }
-
                     voiceIndex = if (br >= 0) br else 0
                     engine.voice = voices[voiceIndex]
                     updateVoiceButton()
@@ -555,7 +531,6 @@ class MainActivity : ComponentActivity() {
 
                 engine.setOnUtteranceProgressListener(
                     object : UtteranceProgressListener() {
-
                         override fun onStart(utteranceId: String?) {}
 
                         override fun onRangeStart(
@@ -567,9 +542,7 @@ class MainActivity : ComponentActivity() {
                             runOnUiThread {
                                 if (utteranceId != activeUtteranceId ||
                                     currentChunk !in chunks.indices
-                                ) {
-                                    return@runOnUiThread
-                                }
+                                ) return@runOnUiThread
 
                                 val chunk = chunks[currentChunk]
 
@@ -635,7 +608,6 @@ class MainActivity : ComponentActivity() {
                 )
 
                 ttsReady = true
-
                 statusText.text = if (documentText.isNotBlank()) {
                     "Documento carregado. Seu progresso está disponível."
                 } else {
@@ -670,18 +642,14 @@ class MainActivity : ComponentActivity() {
                             "Não foi possível abrir o PDF original."
                         )
                     }
-                    savedFile.outputStream().use { output ->
-                        input.copyTo(output)
-                    }
+                    savedFile.outputStream().use { output -> input.copyTo(output) }
                 }
 
-                // Extrai o texto separadamente para manter os limites das páginas.
                 val extracted = extractPdfWithPages(savedFile)
                 val organized = extracted.text
 
                 runOnUiThread {
                     importButton.isEnabled = true
-
                     currentBookFile = savedFile.name
                     currentBookName = originalName
                     documentText = organized
@@ -696,21 +664,20 @@ class MainActivity : ComponentActivity() {
                     currentCharOffset = 0
                     lastSavedPercent = -1
                     lastSavedOffset = -1
-
                     fileNameText.text = originalName
 
                     if (documentText.isBlank()) {
                         chunks = emptyList()
-                        contentText.text =
+                        setDocumentTextView(
                             "Nenhum texto foi encontrado. O PDF pode conter páginas " +
-                                "digitalizadas como imagens; OCR ainda não está disponível."
-                        contentText.setTextColor(muted)
+                                "digitalizadas como imagens; OCR ainda não está disponível.",
+                            muted
+                        )
                         statusText.text = "PDF salvo, mas sem texto extraível."
                         readingIndicator.text = "■  SEM TEXTO DISPONÍVEL"
                     } else {
                         chunks = splitIntoChunks(documentText)
-                        contentText.text = documentText
-                        contentText.setTextColor(white)
+                        setDocumentTextView(documentText, white)
                         statusText.text =
                             "PDF pronto • ${documentText.split(Regex("\\s+")).size} palavras"
                         readingIndicator.text = "■  PRONTO PARA LER"
@@ -725,17 +692,17 @@ class MainActivity : ComponentActivity() {
                 runOnUiThread {
                     importButton.isEnabled = true
                     statusText.text = "Não foi possível importar este PDF."
-                    contentText.text =
+                    setDocumentTextView(
                         "Verifique o arquivo e o espaço disponível.\n\n" +
-                            (e.localizedMessage ?: "Erro desconhecido")
-                    contentText.setTextColor(muted)
+                            (e.localizedMessage ?: "Erro desconhecido"),
+                        muted
+                    )
                     readingIndicator.text = "■  ERRO AO ABRIR PDF"
                 }
             }
         }
     }
 
-    // Nova função: extrai cada página individualmente e registra seus limites no texto.
     private fun extractPdfWithPages(file: File): ExtractedPdf {
         val combinedText = StringBuilder()
         val pages = mutableListOf<PageRange>()
@@ -749,42 +716,27 @@ class MainActivity : ComponentActivity() {
                 stripper.endPage = pageNumber
 
                 val pageText = formatDocumentText(stripper.getText(document))
+
                 if (pageText.isNotBlank()) {
-                    if (combinedText.isNotEmpty()) {
-                        combinedText.append("\n\n")
-                    }
+                    if (combinedText.isNotEmpty()) combinedText.append("\n\n")
 
                     val start = combinedText.length
                     combinedText.append(pageText)
-                    val end = combinedText.length
 
                     pages.add(
-                        PageRange(
-                            pageNumber = pageNumber,
-                            start = start,
-                            end = end
-                        )
+                        PageRange(pageNumber, start, combinedText.length)
                     )
                 } else {
-                    // Página sem texto: mantém o número real da página no índice.
                     pages.add(
-                        PageRange(
-                            pageNumber = pageNumber,
-                            start = combinedText.length,
-                            end = combinedText.length
-                        )
+                        PageRange(pageNumber, combinedText.length, combinedText.length)
                     )
                 }
             }
         }
 
-        return ExtractedPdf(
-            text = combinedText.toString().trim(),
-            pages = pages
-        )
+        return ExtractedPdf(combinedText.toString().trim(), pages)
     }
 
-    // Detecta títulos comuns, como "Capítulo 1", "CAPÍTULO II" ou "Parte 3".
     private fun detectChapters(text: String): List<ChapterRange> {
         if (text.isBlank()) return emptyList()
 
@@ -803,15 +755,10 @@ class MainActivity : ComponentActivity() {
                 text.length
             }
 
-            ChapterRange(
-                title = match.groupValues[1].trim(),
-                start = start,
-                end = end
-            )
+            ChapterRange(match.groupValues[1].trim(), start, end)
         }.filter { it.end > it.start }
     }
 
-    // Menu de seleção. A opção original "Sem limite" sempre fica disponível.
     private fun showRangeDialog() {
         if (documentText.isBlank() || pageRanges.isEmpty()) {
             toast("Importe um PDF com texto primeiro.")
@@ -828,12 +775,7 @@ class MainActivity : ComponentActivity() {
             .setTitle("Trecho de leitura")
             .setItems(options) { _, which ->
                 when (which) {
-                    0 -> applyReadingRange(
-                        0,
-                        documentText.length,
-                        "Sem limite"
-                    )
-
+                    0 -> applyReadingRange(0, documentText.length, "Sem limite")
                     1 -> showPageRangePicker()
                     2 -> showChapterRangePicker()
                 }
@@ -854,9 +796,7 @@ class MainActivity : ComponentActivity() {
             setPadding(dp(24), dp(12), dp(24), dp(8))
         }
 
-        container.addView(
-            makeText("Página inicial", 14f, white, true)
-        )
+        container.addView(makeText("Página inicial", 14f, white, true))
 
         val startPicker = NumberPicker(this).apply {
             minValue = 1
@@ -867,8 +807,7 @@ class MainActivity : ComponentActivity() {
         container.addView(
             startPicker,
             LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(52)
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(52)
             )
         )
 
@@ -887,21 +826,15 @@ class MainActivity : ComponentActivity() {
         container.addView(
             endPicker,
             LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(52)
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(52)
             )
         )
 
         startPicker.setOnValueChangedListener { _, newValue, _ ->
-            if (endPicker.value < newValue) {
-                endPicker.value = newValue
-            }
+            if (endPicker.value < newValue) endPicker.value = newValue
         }
-
         endPicker.setOnValueChangedListener { _, newValue, _ ->
-            if (startPicker.value > newValue) {
-                startPicker.value = newValue
-            }
+            if (startPicker.value > newValue) startPicker.value = newValue
         }
 
         AlertDialog.Builder(this)
@@ -910,7 +843,6 @@ class MainActivity : ComponentActivity() {
             .setPositiveButton("Aplicar") { _, _ ->
                 val firstPage = startPicker.value
                 val lastPage = endPicker.value.coerceAtLeast(firstPage)
-
                 val first = pageRanges[firstPage - 1]
                 val last = pageRanges[lastPage - 1]
 
@@ -950,9 +882,7 @@ class MainActivity : ComponentActivity() {
             setPadding(dp(24), dp(12), dp(24), dp(8))
         }
 
-        container.addView(
-            makeText("Capítulo inicial", 14f, white, true)
-        )
+        container.addView(makeText("Capítulo inicial", 14f, white, true))
 
         val startPicker = NumberPicker(this).apply {
             minValue = 1
@@ -961,12 +891,10 @@ class MainActivity : ComponentActivity() {
             displayedValues = titles
             wrapSelectorWheel = false
         }
-
         container.addView(
             startPicker,
             LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(60)
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(60)
             )
         )
 
@@ -983,25 +911,18 @@ class MainActivity : ComponentActivity() {
             displayedValues = titles
             wrapSelectorWheel = false
         }
-
         container.addView(
             endPicker,
             LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(60)
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(60)
             )
         )
 
         startPicker.setOnValueChangedListener { _, newValue, _ ->
-            if (endPicker.value < newValue) {
-                endPicker.value = newValue
-            }
+            if (endPicker.value < newValue) endPicker.value = newValue
         }
-
         endPicker.setOnValueChangedListener { _, newValue, _ ->
-            if (startPicker.value > newValue) {
-                startPicker.value = newValue
-            }
+            if (startPicker.value > newValue) startPicker.value = newValue
         }
 
         AlertDialog.Builder(this)
@@ -1010,7 +931,6 @@ class MainActivity : ComponentActivity() {
             .setPositiveButton("Aplicar") { _, _ ->
                 val firstIndex = startPicker.value - 1
                 val lastIndex = endPicker.value - 1
-
                 val first = chapterRanges[firstIndex]
                 val last = chapterRanges[lastIndex]
 
@@ -1028,7 +948,6 @@ class MainActivity : ComponentActivity() {
             .show()
     }
 
-    // Atualiza somente o trecho narrado. O documento completo continua visível.
     private fun applyReadingRange(
         requestedStart: Int,
         requestedEnd: Int,
@@ -1052,11 +971,7 @@ class MainActivity : ComponentActivity() {
         activeRangeStart = start
         activeRangeEnd = end
         activeRangeLabel = label
-
-        chunks = splitIntoChunks(
-            documentText.substring(start, end),
-            start
-        )
+        chunks = splitIntoChunks(documentText.substring(start, end), start)
 
         currentChunk = 0
         currentCharOffset = 0
@@ -1076,12 +991,7 @@ class MainActivity : ComponentActivity() {
             .replace(Regex("[^a-zA-Z0-9._-]"), "_")
             .ifBlank { "documento.pdf" }
 
-        val name = if (cleaned.endsWith(".pdf", true)) {
-            cleaned
-        } else {
-            "$cleaned.pdf"
-        }
-
+        val name = if (cleaned.endsWith(".pdf", true)) cleaned else "$cleaned.pdf"
         return File(pdfFolder, "${System.currentTimeMillis()}_$name")
     }
 
@@ -1124,11 +1034,7 @@ class MainActivity : ComponentActivity() {
                     bookList.removeAllViews()
                     librarySummary.text = "Não foi possível carregar a biblioteca."
                     bookList.addView(
-                        makeText(
-                            "Tente atualizar a biblioteca novamente.",
-                            14f,
-                            muted
-                        )
+                        makeText("Tente atualizar a biblioteca novamente.", 14f, muted)
                     )
                 }
             }
@@ -1160,33 +1066,26 @@ class MainActivity : ComponentActivity() {
         documents.forEach { file ->
             val progress = savedBooks.firstOrNull { it.fileName == file.name }
             val percent = progress?.percent ?: 0
-
             val card = makePanel()
 
             card.addView(
                 makeText(
                     progress?.displayName ?: file.name.substringAfter('_', file.name),
-                    16f,
-                    white,
-                    true
+                    16f, white, true
                 )
             )
 
             card.addView(
                 makeText(
                     if (percent >= 100) "Concluído" else "$percent% lido",
-                    12f,
-                    green,
-                    true
+                    12f, green, true
                 ).apply {
                     setPadding(0, dp(8), 0, dp(6))
                 }
             )
 
             val bar = ProgressBar(
-                this,
-                null,
-                android.R.attr.progressBarStyleHorizontal
+                this, null, android.R.attr.progressBarStyleHorizontal
             ).apply {
                 max = 100
                 this.progress = percent.coerceIn(0, 100)
@@ -1199,8 +1098,7 @@ class MainActivity : ComponentActivity() {
             card.addView(
                 bar,
                 LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    dp(6)
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(6)
                 )
             )
 
@@ -1242,7 +1140,6 @@ class MainActivity : ComponentActivity() {
                     pageRanges = extracted.pages
                     chapterRanges = detectChapters(documentText)
 
-                    // Ao abrir um documento salvo, começa com o documento inteiro.
                     activeRangeStart = 0
                     activeRangeEnd = documentText.length
                     activeRangeLabel = "Sem limite"
@@ -1273,10 +1170,12 @@ class MainActivity : ComponentActivity() {
 
                     lastSavedPercent = progress?.percent ?: -1
                     lastSavedOffset = progress?.charOffset ?: -1
-
                     fileNameText.text = currentBookName
-                    contentText.text = documentText
-                    contentText.setTextColor(if (documentText.isBlank()) muted else white)
+
+                    setDocumentTextView(
+                        documentText,
+                        if (documentText.isBlank()) muted else white
+                    )
 
                     if (documentText.isBlank()) {
                         statusText.text = "Este PDF não possui texto extraível."
@@ -1290,7 +1189,7 @@ class MainActivity : ComponentActivity() {
                     clearHighlight()
                     saveCurrentProgress(force = true)
                 }
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 runOnUiThread {
                     statusText.text = "Não foi possível abrir este documento."
                     toast("Confira se o PDF ainda existe no armazenamento do app.")
@@ -1302,16 +1201,14 @@ class MainActivity : ComponentActivity() {
     private fun saveCurrentProgress(force: Boolean = false) {
         if (currentBookFile.isBlank() || documentText.isBlank() ||
             !::progressFile.isInitialized
-        ) {
-            return
-        }
+        ) return
 
         val absolute = when {
             chunks.isEmpty() -> 0
             currentChunk >= chunks.size -> activeRangeEnd
-            currentChunk in chunks.indices -> (
-                chunks[currentChunk].start + currentCharOffset
-            ).coerceIn(0, documentText.length)
+            currentChunk in chunks.indices ->
+                (chunks[currentChunk].start + currentCharOffset)
+                    .coerceIn(0, documentText.length)
             else -> 0
         }
 
@@ -1319,17 +1216,14 @@ class MainActivity : ComponentActivity() {
             0
         } else {
             ((absolute.toDouble() / documentText.length) * 100)
-                .toInt()
-                .coerceIn(0, 100)
+                .toInt().coerceIn(0, 100)
         }
 
         if (!force &&
             lastSavedPercent == percent &&
             lastSavedOffset >= 0 &&
             kotlin.math.abs(absolute - lastSavedOffset) < 80
-        ) {
-            return
-        }
+        ) return
 
         lastSavedPercent = percent
         lastSavedOffset = absolute
@@ -1344,7 +1238,6 @@ class MainActivity : ComponentActivity() {
 
         savedBooks.removeAll { it.fileName == entry.fileName }
         savedBooks.add(entry)
-
         val snapshot = savedBooks.toList()
 
         executor.execute {
@@ -1365,7 +1258,6 @@ class MainActivity : ComponentActivity() {
 
         for (i in 0 until array.length()) {
             val item = array.optJSONObject(i) ?: continue
-
             result.add(
                 BookProgress(
                     fileName = item.optString("fileName"),
@@ -1384,7 +1276,6 @@ class MainActivity : ComponentActivity() {
         if (!appFolder.exists()) appFolder.mkdirs()
 
         val array = JSONArray()
-
         entries.forEach { book ->
             array.put(
                 JSONObject().apply {
@@ -1430,7 +1321,6 @@ class MainActivity : ComponentActivity() {
 
         normalized.lines().forEach { rawLine ->
             val line = rawLine.replace(Regex("[\\t ]+"), " ").trim()
-
             if (line.isEmpty()) {
                 flushParagraph()
             } else {
@@ -1443,7 +1333,6 @@ class MainActivity : ComponentActivity() {
         return output.toString().trim()
     }
 
-    // globalStart permite narrar um recorte mantendo os índices do texto completo.
     private fun splitIntoChunks(
         text: String,
         globalStart: Int = 0
@@ -1477,9 +1366,7 @@ class MainActivity : ComponentActivity() {
             }
 
             while (end > start && text[end - 1].isWhitespace()) end--
-            if (end <= start) {
-                end = (start + maxLength).coerceAtMost(text.length)
-            }
+            if (end <= start) end = (start + maxLength).coerceAtMost(text.length)
 
             result.add(
                 SpeechChunk(
@@ -1524,7 +1411,6 @@ class MainActivity : ComponentActivity() {
         playButton.text = "Ⅱ  Pause"
         statusText.text = "Narrando..."
         readingIndicator.text = "■  LENDO AGORA"
-
         speakCurrentChunk()
     }
 
@@ -1538,7 +1424,6 @@ class MainActivity : ComponentActivity() {
         playButton.text = "▶  Continuar"
         statusText.text = "Leitura pausada."
         readingIndicator.text = "■  LEITURA PAUSADA"
-
         saveCurrentProgress(force = true)
     }
 
@@ -1549,9 +1434,7 @@ class MainActivity : ComponentActivity() {
         tts?.stop()
         activeUtteranceId = ""
 
-        if (::playButton.isInitialized) {
-            playButton.text = "▶  Play"
-        }
+        if (::playButton.isInitialized) playButton.text = "▶  Play"
     }
 
     private fun speakCurrentChunk() {
@@ -1609,7 +1492,6 @@ class MainActivity : ComponentActivity() {
         updateProgress()
         clearHighlight()
         saveCurrentProgress(force = true)
-
         statusText.text = "Trecho ${currentChunk + 1} selecionado."
 
         if (resume) startSpeech()
@@ -1642,35 +1524,69 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun highlightPosition(start: Int, end: Int) {
-        if (documentText.isEmpty()) return
+    // Prepara o documento uma única vez, em vez de recriá-lo a cada palavra.
+    private fun setDocumentTextView(text: String, color: Int) {
+        val builder = SpannableStringBuilder(text)
 
-        val a = start.coerceIn(0, documentText.length)
-        val b = end.coerceIn(a, documentText.length)
+        renderedDocument = builder
+        backgroundHighlightSpan = null
+        foregroundHighlightSpan = null
+
+        contentText.text = builder
+        contentText.setTextColor(color)
+    }
+
+    // Remove somente os spans usados no destaque anterior.
+    private fun removeCurrentHighlight() {
+        val text = renderedDocument ?: return
+
+        backgroundHighlightSpan?.let { span ->
+            if (text.getSpanStart(span) >= 0) text.removeSpan(span)
+        }
+
+        foregroundHighlightSpan?.let { span ->
+            if (text.getSpanStart(span) >= 0) text.removeSpan(span)
+        }
+
+        backgroundHighlightSpan = null
+        foregroundHighlightSpan = null
+    }
+
+    private fun highlightPosition(start: Int, end: Int) {
+        val text = renderedDocument ?: return
+        if (text.isEmpty()) return
+
+        val a = start.coerceIn(0, text.length)
+        val b = end.coerceIn(a, text.length)
         if (b <= a) return
 
-        val span = SpannableString(documentText)
-        span.setSpan(
-            BackgroundColorSpan(highlight),
+        // Reutiliza o texto existente; não copia o PDF inteiro.
+        removeCurrentHighlight()
+
+        val backgroundSpan = BackgroundColorSpan(highlight)
+        val foregroundSpan = ForegroundColorSpan(green)
+
+        text.setSpan(
+            backgroundSpan,
             a,
             b,
             Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
         )
-        span.setSpan(
-            ForegroundColorSpan(green),
+        text.setSpan(
+            foregroundSpan,
             a,
             b,
             Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
         )
 
-        contentText.text = span
+        backgroundHighlightSpan = backgroundSpan
+        foregroundHighlightSpan = foregroundSpan
+
         readingIndicator.text = "■  LENDO AGORA"
     }
 
     private fun clearHighlight() {
-        if (::contentText.isInitialized) {
-            contentText.text = documentText
-        }
+        removeCurrentHighlight()
     }
 
     private fun updateProgress() {
@@ -1697,7 +1613,6 @@ class MainActivity : ComponentActivity() {
             val index = cursor.getColumnIndex(
                 android.provider.OpenableColumns.DISPLAY_NAME
             )
-
             if (cursor.moveToFirst() && index >= 0) {
                 name = cursor.getString(index) ?: name
             }
