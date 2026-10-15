@@ -1,14 +1,11 @@
 
 package com.audipdf.app
 
-import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
-import android.provider.DocumentsContract
-import android.provider.OpenableColumns
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.text.SpannableString
@@ -33,6 +30,7 @@ import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.text.PDFTextStripper
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.util.Locale
 import java.util.concurrent.Executors
 
@@ -60,10 +58,13 @@ class MainActivity : ComponentActivity() {
     private lateinit var speedText: TextView
     private lateinit var voiceButton: Button
     private lateinit var readingIndicator: TextView
-    private lateinit var folderStatus: TextView
     private lateinit var librarySummary: TextView
     private lateinit var homeTab: Button
     private lateinit var libraryTab: Button
+
+    private lateinit var appFolder: File
+    private lateinit var pdfFolder: File
+    private lateinit var progressFile: File
 
     private var tts: TextToSpeech? = null
     private var ttsReady = false
@@ -84,13 +85,10 @@ class MainActivity : ComponentActivity() {
     private var voices = listOf<android.speech.tts.Voice>()
     private var voiceIndex = 0
 
-    private var treeUri: Uri? = null
-    private var rootFolderUri: Uri? = null
-    private var pdfFolderUri: Uri? = null
-
     private var currentBookFile = ""
     private var currentBookName = ""
     private var lastSavedPercent = -1
+    private var lastSavedOffset = -1
     private var savedBooks = mutableListOf<BookProgress>()
 
     private data class SpeechChunk(
@@ -107,46 +105,29 @@ class MainActivity : ComponentActivity() {
         val chunkIndex: Int
     )
 
-    private data class StoredDocument(
-        val name: String,
-        val displayName: String,
-        val uri: Uri
-    )
-
     private val pdfPicker =
         registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
             if (uri != null) importPdf(uri)
         }
 
-    private val folderPicker =
-        registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
-            if (uri != null) {
-                try {
-                    contentResolver.takePersistableUriPermission(
-                        uri,
-                        Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                            Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                    )
-                    treeUri = uri
-                    rootFolderUri = DocumentsContract.buildDocumentUriUsingTree(
-                        uri,
-                        DocumentsContract.getTreeDocumentId(uri)
-                    )
-                    ensurePdfFolder()
-                } catch (e: Exception) {
-                    toast("Não foi possível acessar essa pasta.")
-                }
-            }
-        }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
         window.statusBarColor = bg
         window.navigationBarColor = bg
 
+        appFolder = File(filesDir, "AudiPDF")
+        pdfFolder = File(appFolder, "PDFs")
+        progressFile = File(appFolder, "progresso.json")
+
+        appFolder.mkdirs()
+        pdfFolder.mkdirs()
+
         PDFBoxResourceLoader.init(applicationContext)
+
         buildInterface()
         initializeVoice()
+        refreshLibrary()
     }
 
     private fun buildInterface() {
@@ -190,6 +171,7 @@ class MainActivity : ComponentActivity() {
         homeTab = makeButton("⌂  Início", green, Color.rgb(8, 20, 12)) {
             showTab(false)
         }
+
         libraryTab = makeButton("▤  Biblioteca", panel, white) {
             showTab(true)
             refreshLibrary()
@@ -204,6 +186,7 @@ class MainActivity : ComponentActivity() {
         homeContent = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
         }
+
         libraryContent = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
@@ -222,64 +205,91 @@ class MainActivity : ComponentActivity() {
     private fun buildHome() {
         val hero = makePanel()
         hero.addView(makeText("ESCUTE. APRENDA. EVOLUA.", 10f, green, true))
-        hero.addView(makeText("Seu PDF. Sua experiência de áudio.", 25f, white, true).apply {
-            setPadding(0, dp(10), 0, dp(10))
-        })
-        hero.addView(makeText(
-            "Transforme documentos em uma experiência de leitura em voz alta.",
-            14f, muted
-        ))
+        hero.addView(
+            makeText("Seu PDF. Sua experiência de áudio.", 25f, white, true).apply {
+                setPadding(0, dp(10), 0, dp(10))
+            }
+        )
+        hero.addView(
+            makeText(
+                "Transforme documentos em uma experiência de leitura em voz alta.",
+                14f,
+                muted
+            )
+        )
         homeContent.addView(hero, topMargin(18))
+
+        val warning = makePanel()
+        warning.background = rounded(Color.rgb(35, 43, 31), 16)
+        warning.addView(makeText("⚠  IMPORTANTE SOBRE SEUS DADOS", 12f, green, true))
+        warning.addView(
+            makeText(
+                "Atualizar o AudiPDF instalando uma nova versão por cima da atual " +
+                    "normalmente preserva seus PDFs e seu progresso.\n\n" +
+                    "Desinstalar o aplicativo ou limpar os dados dele pode apagar " +
+                    "os documentos e o progresso salvos neste aparelho. Para evitar " +
+                    "perdas, mantenha cópias dos PDFs originais.",
+                13f,
+                white
+            ).apply {
+                setPadding(0, dp(10), 0, 0)
+            }
+        )
+        homeContent.addView(warning, topMargin(14))
 
         homeContent.addView(sectionTitle("Documento atual"))
 
         val documentPanel = makePanel()
+
         fileNameText = makeText("Nenhum PDF selecionado", 17f, white, true)
-        statusText = makeText("Configure a pasta para salvar sua biblioteca.", 13f, muted)
+        statusText = makeText("Preparando o AudiPDF...", 13f, muted)
 
         documentPanel.addView(fileNameText)
         documentPanel.addView(statusText.apply {
             setPadding(0, dp(8), 0, 0)
         })
 
-        val folderButton = makeButton("▣  Escolher pasta de salvamento", panel, white) {
-            folderPicker.launch(null)
-        }
-        documentPanel.addView(folderButton, topMargin(14))
-
-        folderStatus = makeText(
-            "Escolha Documentos/AudiPDF ou crie uma pasta AudiPDF.",
-            12f, muted
-        ).apply { setPadding(0, dp(8), 0, 0) }
-        documentPanel.addView(folderStatus)
-
         importButton = makeButton("＋  Importar PDF", green, Color.rgb(8, 20, 12)) {
-            if (pdfFolderUri == null) {
-                toast("Escolha primeiro a pasta de salvamento.")
-                folderPicker.launch(null)
-            } else {
-                pdfPicker.launch(arrayOf("application/pdf"))
-            }
+            pdfPicker.launch(arrayOf("application/pdf"))
         }
         documentPanel.addView(importButton, topMargin(14))
+
+        documentPanel.addView(
+            makeText(
+                "Seus PDFs serão copiados automaticamente para o armazenamento privado do app.",
+                12f,
+                muted
+            ).apply {
+                setPadding(0, dp(8), 0, 0)
+            }
+        )
+
         homeContent.addView(documentPanel)
 
         homeContent.addView(sectionTitle("Player AudiPDF"))
 
         val player = makePanel()
         player.addView(makeText("Leitura narrada", 20f, white, true))
-        player.addView(makeText(
-            "Acompanhe o texto enquanto a voz faz a leitura.",
-            12f, muted
-        ).apply { setPadding(0, dp(6), 0, 0) })
+        player.addView(
+            makeText(
+                "Acompanhe o texto enquanto a voz faz a leitura.",
+                12f,
+                muted
+            ).apply {
+                setPadding(0, dp(6), 0, 0)
+            }
+        )
 
         seekBar = SeekBar(this).apply {
             max = 1
             progress = 0
-            progressTintList = android.content.res.ColorStateList.valueOf(green)
-            thumbTintList = android.content.res.ColorStateList.valueOf(green)
+            progressTintList =
+                android.content.res.ColorStateList.valueOf(green)
+            thumbTintList =
+                android.content.res.ColorStateList.valueOf(green)
             isEnabled = false
         }
+
         seekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) {
                 if (fromUser && chunks.isNotEmpty()) {
@@ -291,16 +301,20 @@ class MainActivity : ComponentActivity() {
 
             override fun onStopTrackingTouch(s: SeekBar?) {
                 if (chunks.isEmpty()) return
+
                 val resume = isPlaying
                 stopSpeech()
                 currentChunk = seekBar.progress.coerceIn(0, chunks.lastIndex)
                 currentCharOffset = 0
+
                 updateProgress()
                 clearHighlight()
-                saveCurrentProgress()
+                saveCurrentProgress(force = true)
+
                 if (resume) startSpeech()
             }
         })
+
         player.addView(seekBar, topMargin(12))
 
         seekText = makeText("Nenhum trecho carregado", 12f, muted)
@@ -311,86 +325,128 @@ class MainActivity : ComponentActivity() {
             gravity = Gravity.CENTER
             setPadding(0, dp(12), 0, dp(8))
         }
-        controls.addView(makeButton("−1 trecho", panel, white) {
-            moveChunk(-1)
-        }, LinearLayout.LayoutParams(0, dp(48), 1f).apply {
-            marginEnd = dp(5)
-        })
+
+        controls.addView(
+            makeButton("−1 trecho", panel, white) {
+                moveChunk(-1)
+            },
+            LinearLayout.LayoutParams(0, dp(48), 1f).apply {
+                marginEnd = dp(5)
+            }
+        )
 
         playButton = makeButton("▶  Play", green, Color.rgb(8, 20, 12)) {
             togglePlayback()
         }
-        controls.addView(playButton, LinearLayout.LayoutParams(0, dp(50), 1.4f).apply {
-            marginEnd = dp(5)
-        })
 
-        controls.addView(makeButton("+1 trecho", panel, white) {
-            moveChunk(1)
-        }, LinearLayout.LayoutParams(0, dp(48), 1f))
+        controls.addView(
+            playButton,
+            LinearLayout.LayoutParams(0, dp(50), 1.4f).apply {
+                marginEnd = dp(5)
+            }
+        )
+
+        controls.addView(
+            makeButton("+1 trecho", panel, white) {
+                moveChunk(1)
+            },
+            LinearLayout.LayoutParams(0, dp(48), 1f)
+        )
+
         player.addView(controls)
 
-        player.addView(makeText("VELOCIDADE", 10f, green, true).apply {
-            setPadding(0, dp(12), 0, dp(6))
-        })
+        player.addView(
+            makeText("VELOCIDADE", 10f, green, true).apply {
+                setPadding(0, dp(12), 0, dp(6))
+            }
+        )
+
         speedText = makeText("1,0×", 16f, white, true)
         player.addView(speedText)
 
         val speedControls = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
         }
-        speedControls.addView(makeButton("−", panel, white) {
-            changeSpeed(-1)
-        }, LinearLayout.LayoutParams(0, dp(44), 1f).apply {
-            marginEnd = dp(8)
-        })
-        speedControls.addView(makeButton("+", panel, white) {
-            changeSpeed(1)
-        }, LinearLayout.LayoutParams(0, dp(44), 1f))
+
+        speedControls.addView(
+            makeButton("−", panel, white) {
+                changeSpeed(-1)
+            },
+            LinearLayout.LayoutParams(0, dp(44), 1f).apply {
+                marginEnd = dp(8)
+            }
+        )
+
+        speedControls.addView(
+            makeButton("+", panel, white) {
+                changeSpeed(1)
+            },
+            LinearLayout.LayoutParams(0, dp(44), 1f)
+        )
+
         player.addView(speedControls, topMargin(8))
 
         voiceButton = makeButton("Voz: carregando...", panel, white) {
             changeVoice()
         }
         player.addView(voiceButton, topMargin(10))
+
         homeContent.addView(player)
 
         homeContent.addView(sectionTitle("Leitura do documento"))
 
         val reading = makePanel()
+
         readingIndicator = makeText("■  PRONTO PARA LER", 11f, green, true).apply {
             setPadding(dp(10), dp(8), dp(10), dp(8))
             background = rounded(Color.rgb(20, 48, 31), 8)
         }
+
         reading.addView(readingIndicator, bottomMargin(14))
 
         contentText = makeText(
             "Importe um PDF para visualizar o texto organizado aqui.",
-            15f, muted
+            15f,
+            muted
         ).apply {
             setTextIsSelectable(true)
             setLineSpacing(dp(7).toFloat(), 1.08f)
         }
+
         reading.addView(contentText)
         homeContent.addView(reading)
 
-        homeContent.addView(makeText(
-            "FOCO  •  CONHECIMENTO  •  LIBERDADE", 10f, muted, true
-        ).apply {
-            gravity = Gravity.CENTER
-            setPadding(0, dp(24), 0, 0)
-        })
+        homeContent.addView(
+            makeText(
+                "FOCO  •  CONHECIMENTO  •  LIBERDADE",
+                10f,
+                muted,
+                true
+            ).apply {
+                gravity = Gravity.CENTER
+                setPadding(0, dp(24), 0, 0)
+            }
+        )
     }
 
     private fun buildLibrary() {
-        libraryContent.addView(makeText("Sua biblioteca", 27f, white, true).apply {
-            setPadding(0, dp(22), 0, dp(6))
-        })
-        libraryContent.addView(makeText(
-            "Seus documentos e o progresso salvo neste aparelho.",
-            13f, muted
-        ).apply { setPadding(0, 0, 0, dp(16)) })
+        libraryContent.addView(
+            makeText("Sua biblioteca", 27f, white, true).apply {
+                setPadding(0, dp(22), 0, dp(6))
+            }
+        )
 
-        librarySummary = makeText("0 documentos", 12f, green, true)
+        libraryContent.addView(
+            makeText(
+                "Seus documentos e o progresso salvo neste aparelho.",
+                13f,
+                muted
+            ).apply {
+                setPadding(0, 0, 0, dp(16))
+            }
+        )
+
+        librarySummary = makeText("Carregando documentos...", 12f, green, true)
         libraryContent.addView(librarySummary, bottomMargin(12))
 
         bookList = LinearLayout(this).apply {
@@ -398,23 +454,22 @@ class MainActivity : ComponentActivity() {
         }
         libraryContent.addView(bookList)
 
-        libraryContent.addView(makeButton("Escolher / recuperar pasta", panel, white) {
-            folderPicker.launch(null)
-        }, topMargin(12))
+        libraryContent.addView(
+            makeButton("↻  Atualizar biblioteca", panel, white) {
+                refreshLibrary()
+            },
+            topMargin(12)
+        )
     }
 
     private fun showTab(library: Boolean) {
         homeContent.visibility = if (library) View.GONE else View.VISIBLE
         libraryContent.visibility = if (library) View.VISIBLE else View.GONE
 
-        homeTab.background = rounded(
-            if (library) panel else green, 14
-        )
+        homeTab.background = rounded(if (library) panel else green, 14)
         homeTab.setTextColor(if (library) white else Color.rgb(8, 20, 12))
 
-        libraryTab.background = rounded(
-            if (library) green else panel, 14
-        )
+        libraryTab.background = rounded(if (library) green else panel, 14)
         libraryTab.setTextColor(if (library) Color.rgb(8, 20, 12) else white)
     }
 
@@ -430,11 +485,15 @@ class MainActivity : ComponentActivity() {
 
                 val engine = tts ?: return@runOnUiThread
                 val language = engine.setLanguage(Locale("pt", "BR"))
+
                 if (language == TextToSpeech.LANG_MISSING_DATA ||
                     language == TextToSpeech.LANG_NOT_SUPPORTED
                 ) {
                     engine.setLanguage(Locale.getDefault())
-                    toast("Se necessário, instale uma voz em português nas configurações do Android.")
+                    toast(
+                        "Se necessário, instale uma voz em português " +
+                            "nas configurações do Android."
+                    )
                 }
 
                 voices = engine.voices
@@ -446,6 +505,7 @@ class MainActivity : ComponentActivity() {
                     val br = voices.indexOfFirst {
                         it.locale.country.equals("BR", true)
                     }
+
                     voiceIndex = if (br >= 0) br else 0
                     engine.voice = voices[voiceIndex]
                     updateVoiceButton()
@@ -454,8 +514,10 @@ class MainActivity : ComponentActivity() {
                 }
 
                 engine.setSpeechRate(speechRate)
+
                 engine.setOnUtteranceProgressListener(
                     object : UtteranceProgressListener() {
+
                         override fun onStart(utteranceId: String?) {}
 
                         override fun onRangeStart(
@@ -467,16 +529,23 @@ class MainActivity : ComponentActivity() {
                             runOnUiThread {
                                 if (utteranceId != activeUtteranceId ||
                                     currentChunk !in chunks.indices
-                                ) return@runOnUiThread
+                                ) {
+                                    return@runOnUiThread
+                                }
 
                                 val chunk = chunks[currentChunk]
-                                val a = (chunk.start + utteranceBaseOffset + start)
-                                    .coerceIn(0, documentText.length)
-                                val b = (chunk.start + utteranceBaseOffset + end)
-                                    .coerceIn(a, documentText.length)
 
-                                currentCharOffset = (utteranceBaseOffset + end)
-                                    .coerceIn(0, chunk.text.length)
+                                val a = (
+                                    chunk.start + utteranceBaseOffset + start
+                                ).coerceIn(0, documentText.length)
+
+                                val b = (
+                                    chunk.start + utteranceBaseOffset + end
+                                ).coerceIn(a, documentText.length)
+
+                                currentCharOffset = (
+                                    utteranceBaseOffset + end
+                                ).coerceIn(0, chunk.text.length)
 
                                 highlightPosition(a, b)
                                 saveCurrentProgress()
@@ -500,10 +569,10 @@ class MainActivity : ComponentActivity() {
                                     statusText.text = "Leitura concluída."
                                     readingIndicator.text = "■  LEITURA CONCLUÍDA"
                                     updateProgress()
-                                    saveCurrentProgress()
+                                    saveCurrentProgress(force = true)
                                 } else {
                                     updateProgress()
-                                    saveCurrentProgress()
+                                    saveCurrentProgress(force = true)
                                     speakCurrentChunk()
                                 }
                             }
@@ -516,6 +585,7 @@ class MainActivity : ComponentActivity() {
                                     playButton.text = "▶  Play"
                                     statusText.text = "Erro durante a narração."
                                     readingIndicator.text = "■  ERRO NA NARRAÇÃO"
+                                    saveCurrentProgress(force = true)
                                 }
                             }
                         }
@@ -527,95 +597,17 @@ class MainActivity : ComponentActivity() {
                 )
 
                 ttsReady = true
-                if (treeUri == null) {
-                    statusText.text = "Escolha a pasta de salvamento para começar."
+
+                statusText.text = if (documentText.isNotBlank()) {
+                    "Documento carregado. Seu progresso está disponível."
                 } else {
-                    statusText.text = "Voz pronta. Importe um PDF para começar."
+                    "Voz pronta. Importe um PDF para começar."
                 }
             }
         }
-    }
-
-    private fun ensurePdfFolder() {
-        val root = rootFolderUri ?: return
-        executor.execute {
-            try {
-                val existing = listChildren(root).firstOrNull {
-                    it.displayName == "PDFs" &&
-                        it.mimeType == DocumentsContract.Document.MIME_TYPE_DIR
-                }
-
-                val folder = existing?.uri ?: DocumentsContract.createDocument(
-                    contentResolver,
-                    root,
-                    DocumentsContract.Document.MIME_TYPE_DIR,
-                    "PDFs"
-                )
-
-                runOnUiThread {
-                    pdfFolderUri = folder
-                    folderStatus.text = "Pasta vinculada. PDFs e progresso serão salvos nela."
-                    statusText.text = "Pasta pronta. Importe um PDF."
-                    refreshLibrary()
-                }
-            } catch (e: Exception) {
-                runOnUiThread {
-                    folderStatus.text = "Não foi possível abrir a pasta. Tente selecioná-la novamente."
-                    toast("Erro ao preparar a pasta AudiPDF.")
-                }
-            }
-        }
-    }
-
-    private data class ChildInfo(
-        val displayName: String,
-        val mimeType: String,
-        val uri: Uri
-    )
-
-    private fun listChildren(parent: Uri): List<ChildInfo> {
-        val tree = treeUri ?: return emptyList()
-        val parentId = DocumentsContract.getDocumentId(parent)
-        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(tree, parentId)
-        val result = mutableListOf<ChildInfo>()
-
-        contentResolver.query(
-            childrenUri,
-            arrayOf(
-                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-                DocumentsContract.Document.COLUMN_MIME_TYPE
-            ),
-            null, null, null
-        )?.use { cursor ->
-            val idCol = cursor.getColumnIndexOrThrow(
-                DocumentsContract.Document.COLUMN_DOCUMENT_ID
-            )
-            val nameCol = cursor.getColumnIndexOrThrow(
-                DocumentsContract.Document.COLUMN_DISPLAY_NAME
-            )
-            val mimeCol = cursor.getColumnIndexOrThrow(
-                DocumentsContract.Document.COLUMN_MIME_TYPE
-            )
-
-            while (cursor.moveToNext()) {
-                val id = cursor.getString(idCol)
-                val name = cursor.getString(nameCol) ?: "Documento"
-                val mime = cursor.getString(mimeCol) ?: ""
-                val childUri = DocumentsContract.buildDocumentUriUsingTree(tree, id)
-                result.add(ChildInfo(name, mime, childUri))
-            }
-        }
-        return result
     }
 
     private fun importPdf(sourceUri: Uri) {
-        val pdfFolder = pdfFolderUri
-        if (pdfFolder == null) {
-            toast("Escolha primeiro a pasta de salvamento.")
-            return
-        }
-
         stopSpeech()
         importButton.isEnabled = false
         statusText.text = "Copiando e lendo o PDF..."
@@ -623,57 +615,63 @@ class MainActivity : ComponentActivity() {
         contentText.setTextColor(muted)
 
         val originalName = getFileName(sourceUri)
+
         executor.execute {
             try {
-                val safeName = makeUniquePdfName(originalName)
-                val savedUri = DocumentsContract.createDocument(
-                    contentResolver,
-                    pdfFolder,
-                    "application/pdf",
-                    safeName
-                ) ?: throw IllegalStateException("Não foi possível criar a cópia do PDF.")
+                if (!pdfFolder.exists() && !pdfFolder.mkdirs()) {
+                    throw IllegalStateException("Não foi possível preparar o armazenamento.")
+                }
+
+                val savedFile = makeUniquePdfFile(originalName)
 
                 contentResolver.openInputStream(sourceUri).use { input ->
-                    if (input == null) throw IllegalStateException("Não foi possível abrir o PDF.")
-                    contentResolver.openOutputStream(savedUri, "w").use { output ->
-                        if (output == null) throw IllegalStateException("Não foi possível salvar o PDF.")
+                    if (input == null) {
+                        throw IllegalStateException("Não foi possível abrir o PDF original.")
+                    }
+                    savedFile.outputStream().use { output ->
                         input.copyTo(output)
                     }
                 }
 
-                val extracted = contentResolver.openInputStream(savedUri).use { input ->
-                    if (input == null) throw IllegalStateException("Não foi possível reler a cópia.")
-                    PDDocument.load(input).use { doc -> PDFTextStripper().getText(doc) }
+                val extracted = PDDocument.load(savedFile).use { document ->
+                    PDFTextStripper().getText(document)
                 }
 
                 val organized = formatDocumentText(extracted)
+
                 runOnUiThread {
                     importButton.isEnabled = true
-                    currentBookFile = safeName
+
+                    currentBookFile = savedFile.name
                     currentBookName = originalName
                     documentText = organized
                     currentChunk = 0
                     currentCharOffset = 0
                     lastSavedPercent = -1
+                    lastSavedOffset = -1
+
+                    fileNameText.text = originalName
 
                     if (documentText.isBlank()) {
                         chunks = emptyList()
                         contentText.text =
-                            "Nenhum texto foi encontrado. O PDF pode conter páginas digitalizadas como imagens; OCR ainda não está disponível."
+                            "Nenhum texto foi encontrado. O PDF pode conter páginas " +
+                                "digitalizadas como imagens; OCR ainda não está disponível."
                         contentText.setTextColor(muted)
-                        statusText.text = "PDF copiado, mas sem texto extraível."
+                        statusText.text = "PDF salvo, mas sem texto extraível."
                         readingIndicator.text = "■  SEM TEXTO DISPONÍVEL"
                     } else {
                         chunks = splitIntoChunks(documentText)
                         contentText.text = documentText
                         contentText.setTextColor(white)
-                        fileNameText.text = originalName
-                        statusText.text = "PDF pronto • ${documentText.split(Regex("\\s+")).size} palavras"
+                        statusText.text =
+                            "PDF pronto • ${documentText.split(Regex("\\s+")).size} palavras"
                         readingIndicator.text = "■  PRONTO PARA LER"
                         updateProgress()
                         clearHighlight()
-                        saveCurrentProgress()
+                        saveCurrentProgress(force = true)
                     }
+
                     refreshLibrary()
                 }
             } catch (e: Exception) {
@@ -681,7 +679,8 @@ class MainActivity : ComponentActivity() {
                     importButton.isEnabled = true
                     statusText.text = "Não foi possível importar este PDF."
                     contentText.text =
-                        "Verifique o arquivo e o espaço disponível.\n\n${e.localizedMessage ?: "Erro desconhecido"}"
+                        "Verifique o arquivo e o espaço disponível.\n\n" +
+                            (e.localizedMessage ?: "Erro desconhecido")
                     contentText.setTextColor(muted)
                     readingIndicator.text = "■  ERRO AO ABRIR PDF"
                 }
@@ -689,41 +688,44 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun makeUniquePdfName(original: String): String {
+    private fun makeUniquePdfFile(original: String): File {
         val cleaned = original
             .replace(Regex("[^a-zA-Z0-9._-]"), "_")
             .ifBlank { "documento.pdf" }
-        return "${System.currentTimeMillis()}_$cleaned"
+
+        val name = if (cleaned.endsWith(".pdf", true)) {
+            cleaned
+        } else {
+            "$cleaned.pdf"
+        }
+
+        return File(pdfFolder, "${System.currentTimeMillis()}_$name")
     }
 
     private fun refreshLibrary() {
-        val root = rootFolderUri
-        val pdfFolder = pdfFolderUri
-        if (root == null || pdfFolder == null) {
-            if (::bookList.isInitialized) {
-                bookList.removeAllViews()
-                bookList.addView(makeText(
-                    "Escolha a pasta de salvamento para ver os documentos guardados.",
-                    14f, muted
-                ))
-                librarySummary.text = "Pasta não selecionada"
-            }
-            return
-        }
+        if (!::bookList.isInitialized) return
+
+        librarySummary.text = "Carregando documentos..."
+        bookList.removeAllViews()
+        bookList.addView(makeText("Lendo biblioteca...", 13f, muted))
 
         executor.execute {
             try {
-                val progress = readProgressFile(root)
-                val pdfs = listChildren(pdfFolder).filter {
-                    it.mimeType == "application/pdf" ||
-                        it.displayName.endsWith(".pdf", true)
-                }
+                if (!pdfFolder.exists()) pdfFolder.mkdirs()
+                if (!appFolder.exists()) appFolder.mkdirs()
 
+                val progress = readProgressFile()
                 val progressByFile = progress.associateBy { it.fileName }
-                val combined = pdfs.map { pdf ->
-                    progressByFile[pdf.displayName] ?: BookProgress(
-                        fileName = pdf.displayName,
-                        displayName = pdf.displayName.substringAfter('_', pdf.displayName),
+
+                val pdfs = pdfFolder.listFiles()
+                    ?.filter { it.isFile && it.extension.equals("pdf", true) }
+                    ?.sortedByDescending { it.lastModified() }
+                    ?: emptyList()
+
+                val combined = pdfs.map { file ->
+                    progressByFile[file.name] ?: BookProgress(
+                        fileName = file.name,
+                        displayName = file.name.substringAfter('_', file.name),
                         charOffset = 0,
                         percent = 0,
                         chunkIndex = 0
@@ -734,19 +736,23 @@ class MainActivity : ComponentActivity() {
                     savedBooks = combined
                     renderLibrary(pdfs)
                 }
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 runOnUiThread {
                     bookList.removeAllViews()
-                    bookList.addView(makeText(
-                        "Não foi possível ler a biblioteca. Verifique se a pasta continua acessível.",
-                        14f, muted
-                    ))
+                    librarySummary.text = "Não foi possível carregar a biblioteca."
+                    bookList.addView(
+                        makeText(
+                            "Tente atualizar a biblioteca novamente.",
+                            14f,
+                            muted
+                        )
+                    )
                 }
             }
         }
     }
 
-    private fun renderLibrary(documents: List<ChildInfo>) {
+    private fun renderLibrary(documents: List<File>) {
         bookList.removeAllViews()
         librarySummary.text =
             "${documents.size} documento(s) • progresso salvo no aparelho"
@@ -754,117 +760,190 @@ class MainActivity : ComponentActivity() {
         if (documents.isEmpty()) {
             val empty = makePanel()
             empty.addView(makeText("Sua biblioteca está vazia", 18f, white, true))
-            empty.addView(makeText(
-                "Importe um PDF pela aba Início. Uma cópia será guardada na pasta escolhida.",
-                13f, muted
-            ).apply { setPadding(0, dp(8), 0, 0) })
+            empty.addView(
+                makeText(
+                    "Importe um PDF pela aba Início. Ele será copiado automaticamente " +
+                        "para o armazenamento privado do AudiPDF.",
+                    13f,
+                    muted
+                ).apply {
+                    setPadding(0, dp(8), 0, 0)
+                }
+            )
             bookList.addView(empty)
             return
         }
 
-        documents.forEach { doc ->
-            val progress = savedBooks.firstOrNull { it.fileName == doc.displayName }
+        documents.forEach { file ->
+            val progress = savedBooks.firstOrNull { it.fileName == file.name }
             val percent = progress?.percent ?: 0
 
             val card = makePanel()
-            card.addView(makeText(
-                progress?.displayName ?: doc.displayName,
-                16f, white, true
-            ))
-            card.addView(makeText(
-                if (percent >= 100) "Concluído" else "$percent% lido",
-                12f, green, true
-            ).apply { setPadding(0, dp(8), 0, dp(6)) })
 
-            val bar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            card.addView(
+                makeText(
+                    progress?.displayName ?: file.name.substringAfter('_', file.name),
+                    16f,
+                    white,
+                    true
+                )
+            )
+
+            card.addView(
+                makeText(
+                    if (percent >= 100) "Concluído" else "$percent% lido",
+                    12f,
+                    green,
+                    true
+                ).apply {
+                    setPadding(0, dp(8), 0, dp(6))
+                }
+            )
+
+            val bar = ProgressBar(
+                this,
+                null,
+                android.R.attr.progressBarStyleHorizontal
+            ).apply {
                 max = 100
                 this.progress = percent.coerceIn(0, 100)
-                progressTintList = android.content.res.ColorStateList.valueOf(green)
+                progressTintList =
+                    android.content.res.ColorStateList.valueOf(green)
                 progressBackgroundTintList =
                     android.content.res.ColorStateList.valueOf(Color.rgb(48, 55, 49))
             }
-            card.addView(bar, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(6)
-            ))
 
-            card.addView(makeButton(
-                if (percent > 0 && percent < 100) "▶  Continuar lendo" else
-                    if (percent >= 100) "↻  Ler novamente" else "▶  Abrir documento",
-                green, Color.rgb(8, 20, 12)
-            ) {
-                openSavedBook(doc, progress)
-            }, topMargin(12))
+            card.addView(
+                bar,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    dp(6)
+                )
+            )
+
+            card.addView(
+                makeButton(
+                    when {
+                        percent in 1..99 -> "▶  Continuar lendo"
+                        percent >= 100 -> "↻  Ler novamente"
+                        else -> "▶  Abrir documento"
+                    },
+                    green,
+                    Color.rgb(8, 20, 12)
+                ) {
+                    openSavedBook(file, progress)
+                },
+                topMargin(12)
+            )
 
             bookList.addView(card, bottomMargin(12))
         }
     }
 
-    private fun openSavedBook(doc: ChildInfo, progress: BookProgress?) {
+    private fun openSavedBook(file: File, progress: BookProgress?) {
         stopSpeech()
         statusText.text = "Abrindo documento salvo..."
         showTab(false)
 
         executor.execute {
             try {
-                val extracted = contentResolver.openInputStream(doc.uri).use { input ->
-                    if (input == null) throw IllegalStateException("Não foi possível abrir o PDF salvo.")
-                    PDDocument.load(input).use { pdf -> PDFTextStripper().getText(pdf) }
+                val extracted = PDDocument.load(file).use { document ->
+                    PDFTextStripper().getText(document)
                 }
+
                 val organized = formatDocumentText(extracted)
 
                 runOnUiThread {
-                    currentBookFile = doc.displayName
+                    currentBookFile = file.name
                     currentBookName = progress?.displayName
-                        ?: doc.displayName.substringAfter('_', doc.displayName)
+                        ?: file.name.substringAfter('_', file.name)
+
                     documentText = organized
                     chunks = splitIntoChunks(documentText)
 
                     val savedOffset = (progress?.charOffset ?: 0)
                         .coerceIn(0, documentText.length)
+
                     currentChunk = chunks.indexOfFirst {
                         savedOffset >= it.start && savedOffset < it.end
-                    }.let { if (it < 0) 0 else it }
-                    currentCharOffset = if (chunks.isNotEmpty()) {
+                    }.let {
+                        when {
+                            chunks.isEmpty() -> 0
+                            it < 0 && savedOffset >= documentText.length -> chunks.size
+                            it < 0 -> 0
+                            else -> it
+                        }
+                    }
+
+                    currentCharOffset = if (currentChunk in chunks.indices) {
                         (savedOffset - chunks[currentChunk].start)
                             .coerceIn(0, chunks[currentChunk].text.length)
-                    } else 0
+                    } else {
+                        0
+                    }
+
+                    lastSavedPercent = progress?.percent ?: -1
+                    lastSavedOffset = progress?.charOffset ?: -1
 
                     fileNameText.text = currentBookName
                     contentText.text = documentText
-                    contentText.setTextColor(white)
-                    statusText.text = "Documento recuperado da biblioteca."
-                    readingIndicator.text = "■  PRONTO PARA CONTINUAR"
+                    contentText.setTextColor(if (documentText.isBlank()) muted else white)
+
+                    if (documentText.isBlank()) {
+                        statusText.text = "Este PDF não possui texto extraível."
+                        readingIndicator.text = "■  SEM TEXTO DISPONÍVEL"
+                    } else {
+                        statusText.text = "Documento recuperado da biblioteca."
+                        readingIndicator.text = "■  PRONTO PARA CONTINUAR"
+                    }
+
                     updateProgress()
                     clearHighlight()
-                    saveCurrentProgress()
+                    saveCurrentProgress(force = true)
                 }
             } catch (e: Exception) {
                 runOnUiThread {
                     statusText.text = "Não foi possível abrir este documento."
-                    toast("Confira o acesso à pasta AudiPDF.")
+                    toast("Confira se o PDF ainda existe no armazenamento do app.")
                 }
             }
         }
     }
 
-    private fun saveCurrentProgress() {
+    private fun saveCurrentProgress(force: Boolean = false) {
         if (currentBookFile.isBlank() || documentText.isBlank() ||
-            rootFolderUri == null
-        ) return
+            !::progressFile.isInitialized
+        ) {
+            return
+        }
 
-        val absolute = if (currentChunk >= chunks.size) {
-            documentText.length
-        } else if (currentChunk in chunks.indices) {
-            (chunks[currentChunk].start + currentCharOffset)
-                .coerceIn(0, documentText.length)
-        } else 0
+        val absolute = when {
+            chunks.isEmpty() -> 0
+            currentChunk >= chunks.size -> documentText.length
+            currentChunk in chunks.indices -> (
+                chunks[currentChunk].start + currentCharOffset
+            ).coerceIn(0, documentText.length)
+            else -> 0
+        }
 
-        val percent = if (documentText.isEmpty()) 0 else
+        val percent = if (documentText.isEmpty()) {
+            0
+        } else {
             ((absolute.toDouble() / documentText.length) * 100)
-                .toInt().coerceIn(0, 100)
+                .toInt()
+                .coerceIn(0, 100)
+        }
 
-        if (percent == lastSavedPercent) return
+        if (!force &&
+            lastSavedPercent == percent &&
+            lastSavedOffset >= 0 &&
+            kotlin.math.abs(absolute - lastSavedOffset) < 80
+        ) {
+            return
+        }
+
         lastSavedPercent = percent
+        lastSavedOffset = absolute
 
         val entry = BookProgress(
             fileName = currentBookFile,
@@ -877,67 +956,68 @@ class MainActivity : ComponentActivity() {
         savedBooks.removeAll { it.fileName == entry.fileName }
         savedBooks.add(entry)
 
-        val root = rootFolderUri ?: return
         val snapshot = savedBooks.toList()
 
         executor.execute {
             try {
-                writeProgressFile(root, snapshot)
+                writeProgressFile(snapshot)
             } catch (_: Exception) {
-                // O progresso continua em memória; uma próxima gravação tentará novamente.
+                // Uma gravação futura tentará salvar o progresso novamente.
             }
         }
     }
 
-    private fun readProgressFile(root: Uri): MutableList<BookProgress> {
-        val file = listChildren(root).firstOrNull {
-            it.displayName == "progresso.json"
-        } ?: return mutableListOf()
+    private fun readProgressFile(): MutableList<BookProgress> {
+        if (!progressFile.exists()) return mutableListOf()
 
-        val text = contentResolver.openInputStream(file.uri)?.bufferedReader()?.use {
-            it.readText()
-        } ?: return mutableListOf()
-
+        val text = progressFile.readText(Charsets.UTF_8)
         val array = JSONArray(text)
         val result = mutableListOf<BookProgress>()
+
         for (i in 0 until array.length()) {
             val item = array.optJSONObject(i) ?: continue
+
             result.add(
                 BookProgress(
                     fileName = item.optString("fileName"),
                     displayName = item.optString("displayName"),
-                    charOffset = item.optInt("charOffset", 0),
+                    charOffset = item.optInt("charOffset", 0).coerceAtLeast(0),
                     percent = item.optInt("percent", 0).coerceIn(0, 100),
-                    chunkIndex = item.optInt("chunkIndex", 0)
+                    chunkIndex = item.optInt("chunkIndex", 0).coerceAtLeast(0)
                 )
             )
         }
+
         return result
     }
 
-    private fun writeProgressFile(root: Uri, entries: List<BookProgress>) {
-        val existing = listChildren(root).firstOrNull {
-            it.displayName == "progresso.json"
-        }
-
-        val fileUri = existing?.uri ?: DocumentsContract.createDocument(
-            contentResolver, root, "application/json", "progresso.json"
-        ) ?: throw IllegalStateException("Não foi possível criar progresso.json")
+    private fun writeProgressFile(entries: List<BookProgress>) {
+        if (!appFolder.exists()) appFolder.mkdirs()
 
         val array = JSONArray()
+
         entries.forEach { book ->
-            array.put(JSONObject().apply {
-                put("fileName", book.fileName)
-                put("displayName", book.displayName)
-                put("charOffset", book.charOffset)
-                put("percent", book.percent)
-                put("chunkIndex", book.chunkIndex)
-            })
+            array.put(
+                JSONObject().apply {
+                    put("fileName", book.fileName)
+                    put("displayName", book.displayName)
+                    put("charOffset", book.charOffset)
+                    put("percent", book.percent)
+                    put("chunkIndex", book.chunkIndex)
+                }
+            )
         }
 
-        contentResolver.openOutputStream(fileUri, "wt").use { output ->
-            if (output == null) throw IllegalStateException("Não foi possível salvar o progresso.")
-            output.write(array.toString(2).toByteArray(Charsets.UTF_8))
+        val temporary = File(appFolder, "progresso.tmp")
+        temporary.writeText(array.toString(2), Charsets.UTF_8)
+
+        if (progressFile.exists() && !progressFile.delete()) {
+            throw IllegalStateException("Não foi possível atualizar o progresso.")
+        }
+
+        if (!temporary.renameTo(progressFile)) {
+            temporary.copyTo(progressFile, overwrite = true)
+            temporary.delete()
         }
     }
 
@@ -961,6 +1041,7 @@ class MainActivity : ComponentActivity() {
 
         normalized.lines().forEach { rawLine ->
             val line = rawLine.replace(Regex("[\\t ]+"), " ").trim()
+
             if (line.isEmpty()) {
                 flushParagraph()
             } else {
@@ -983,6 +1064,7 @@ class MainActivity : ComponentActivity() {
             if (start >= text.length) break
 
             var end = (start + maxLength).coerceAtMost(text.length)
+
             if (end < text.length) {
                 val paragraphBreak = text.lastIndexOf("\n\n", end)
                 val sentenceBreak = maxOf(
@@ -992,6 +1074,7 @@ class MainActivity : ComponentActivity() {
                     text.lastIndexOf('\n', end)
                 )
                 val spaceBreak = text.lastIndexOf(' ', end)
+
                 end = when {
                     paragraphBreak > start + maxLength / 2 -> paragraphBreak
                     sentenceBreak > start + maxLength / 2 -> sentenceBreak + 1
@@ -1001,23 +1084,28 @@ class MainActivity : ComponentActivity() {
             }
 
             while (end > start && text[end - 1].isWhitespace()) end--
-            if (end <= start) end = (start + maxLength).coerceAtMost(text.length)
+            if (end <= start) {
+                end = (start + maxLength).coerceAtMost(text.length)
+            }
 
             result.add(SpeechChunk(text.substring(start, end), start, end))
             start = end
         }
+
         return result
     }
 
     private fun togglePlayback() {
         if (chunks.isEmpty()) {
-            toast("Importe um PDF primeiro.")
+            toast("Importe um PDF com texto primeiro.")
             return
         }
+
         if (!ttsReady || tts == null) {
             toast("A voz ainda está iniciando.")
             return
         }
+
         if (isPlaying) {
             pauseSpeech()
         } else {
@@ -1031,11 +1119,13 @@ class MainActivity : ComponentActivity() {
 
     private fun startSpeech() {
         if (!ttsReady || chunks.isEmpty()) return
+
         isPlaying = true
         isPaused = false
         playButton.text = "Ⅱ  Pause"
         statusText.text = "Narrando..."
         readingIndicator.text = "■  LENDO AGORA"
+
         speakCurrentChunk()
     }
 
@@ -1045,10 +1135,12 @@ class MainActivity : ComponentActivity() {
         sessionId++
         tts?.stop()
         activeUtteranceId = ""
+
         playButton.text = "▶  Continuar"
         statusText.text = "Leitura pausada."
         readingIndicator.text = "■  LEITURA PAUSADA"
-        saveCurrentProgress()
+
+        saveCurrentProgress(force = true)
     }
 
     private fun stopSpeech() {
@@ -1057,7 +1149,10 @@ class MainActivity : ComponentActivity() {
         isPaused = false
         tts?.stop()
         activeUtteranceId = ""
-        if (::playButton.isInitialized) playButton.text = "▶  Play"
+
+        if (::playButton.isInitialized) {
+            playButton.text = "▶  Play"
+        }
     }
 
     private fun speakCurrentChunk() {
@@ -1066,16 +1161,18 @@ class MainActivity : ComponentActivity() {
 
         if (currentChunk !in chunks.indices) {
             isPlaying = false
+            isPaused = false
             playButton.text = "▶  Play"
             statusText.text = "Leitura concluída."
             readingIndicator.text = "■  LEITURA CONCLUÍDA"
             updateProgress()
-            saveCurrentProgress()
+            saveCurrentProgress(force = true)
             return
         }
 
         val chunk = chunks[currentChunk]
         val base = currentCharOffset.coerceIn(0, chunk.text.length)
+
         if (base >= chunk.text.length) {
             currentChunk++
             currentCharOffset = 0
@@ -1084,7 +1181,9 @@ class MainActivity : ComponentActivity() {
         }
 
         utteranceBaseOffset = base
-        activeUtteranceId = "audi_${sessionId}_${currentChunk}_${System.nanoTime()}"
+        activeUtteranceId =
+            "audipdf_${sessionId}_${currentChunk}_${System.nanoTime()}"
+
         engine.setSpeechRate(speechRate)
         engine.speak(
             chunk.text.substring(base),
@@ -1092,6 +1191,7 @@ class MainActivity : ComponentActivity() {
             null,
             activeUtteranceId
         )
+
         updateProgress()
     }
 
@@ -1100,14 +1200,19 @@ class MainActivity : ComponentActivity() {
             toast("Importe um PDF primeiro.")
             return
         }
+
         val resume = isPlaying
         stopSpeech()
+
         currentChunk = (currentChunk + direction).coerceIn(0, chunks.lastIndex)
         currentCharOffset = 0
+
         updateProgress()
         clearHighlight()
-        saveCurrentProgress()
+        saveCurrentProgress(force = true)
+
         statusText.text = "Trecho ${currentChunk + 1} selecionado."
+
         if (resume) startSpeech()
     }
 
@@ -1123,6 +1228,7 @@ class MainActivity : ComponentActivity() {
             toast("Nenhuma voz em português foi encontrada.")
             return
         }
+
         voiceIndex = (voiceIndex + 1) % voices.size
         tts?.voice = voices[voiceIndex]
         updateVoiceButton()
@@ -1130,25 +1236,42 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun updateVoiceButton() {
-        voiceButton.text = if (voices.isEmpty()) "Voz padrão do Android"
-        else "Voz ${voiceIndex + 1} de ${voices.size}  ▾"
+        voiceButton.text = if (voices.isEmpty()) {
+            "Voz padrão do Android"
+        } else {
+            "Voz ${voiceIndex + 1} de ${voices.size}  ▾"
+        }
     }
 
     private fun highlightPosition(start: Int, end: Int) {
         if (documentText.isEmpty()) return
+
         val a = start.coerceIn(0, documentText.length)
         val b = end.coerceIn(a, documentText.length)
         if (b <= a) return
 
         val span = SpannableString(documentText)
-        span.setSpan(BackgroundColorSpan(highlight), a, b, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-        span.setSpan(ForegroundColorSpan(green), a, b, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        span.setSpan(
+            BackgroundColorSpan(highlight),
+            a,
+            b,
+            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+        )
+        span.setSpan(
+            ForegroundColorSpan(green),
+            a,
+            b,
+            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+        )
+
         contentText.text = span
         readingIndicator.text = "■  LENDO AGORA"
     }
 
     private fun clearHighlight() {
-        if (::contentText.isInitialized) contentText.text = documentText
+        if (::contentText.isInitialized) {
+            contentText.text = documentText
+        }
     }
 
     private fun updateProgress() {
@@ -1163,17 +1286,22 @@ class MainActivity : ComponentActivity() {
         seekBar.max = (chunks.size - 1).coerceAtLeast(1)
         seekBar.progress = currentChunk.coerceIn(0, seekBar.max)
         seekBar.isEnabled = chunks.size > 1
-        seekText.text = "Trecho ${minOf(currentChunk + 1, chunks.size)} de ${chunks.size}"
+
+        seekText.text =
+            "Trecho ${minOf(currentChunk + 1, chunks.size)} de ${chunks.size}"
     }
 
     private fun getFileName(uri: Uri): String {
         var name = "Documento.pdf"
+
         contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-            val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            val index = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+
             if (cursor.moveToFirst() && index >= 0) {
                 name = cursor.getString(index) ?: name
             }
         }
+
         return name
     }
 
@@ -1228,13 +1356,17 @@ class MainActivity : ComponentActivity() {
         LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
-        ).apply { topMargin = dp(value) }
+        ).apply {
+            topMargin = dp(value)
+        }
 
     private fun bottomMargin(value: Int) =
         LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
-        ).apply { bottomMargin = dp(value) }
+        ).apply {
+            bottomMargin = dp(value)
+        }
 
     private fun dp(value: Int): Int =
         (value * resources.displayMetrics.density).toInt()
@@ -1243,8 +1375,13 @@ class MainActivity : ComponentActivity() {
         Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
     }
 
+    override fun onPause() {
+        saveCurrentProgress(force = true)
+        super.onPause()
+    }
+
     override fun onDestroy() {
-        saveCurrentProgress()
+        saveCurrentProgress(force = true)
         stopSpeech()
         tts?.shutdown()
         executor.shutdown()
