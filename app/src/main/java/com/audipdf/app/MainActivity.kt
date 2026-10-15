@@ -28,10 +28,6 @@ import kotlin.math.min
 
 class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
 
-    // ---------------------------------------------------------
-    // MODELOS
-    // ---------------------------------------------------------
-
     private data class SpeechChunk(
         val text: String,
         val start: Int,
@@ -50,16 +46,6 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         val end: Int
     )
 
-    private data class SavedBook(
-        val name: String,
-        val fileName: String,
-        val progress: Int
-    )
-
-    // ---------------------------------------------------------
-    // CORES E ARMAZENAMENTO
-    // ---------------------------------------------------------
-
     private val backgroundColor = Color.rgb(12, 15, 14)
     private val panelColor = Color.rgb(25, 31, 28)
     private val greenColor = Color.rgb(30, 215, 96)
@@ -69,10 +55,6 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     private lateinit var appFolder: File
     private lateinit var pdfFolder: File
     private lateinit var progressFile: File
-
-    // ---------------------------------------------------------
-    // ESTADO DO DOCUMENTO
-    // ---------------------------------------------------------
 
     private var currentFile: File? = null
     private var currentBookName = ""
@@ -99,18 +81,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
 
     private var speechRate = 1.0f
     private var selectedVoiceName = ""
-
     private var currentUtteranceId = 0
-
-    // ---------------------------------------------------------
-    // TEXT TO SPEECH
-    // ---------------------------------------------------------
-
-    private lateinit var textToSpeech: TextToSpeech
-
-    // ---------------------------------------------------------
-    // INTERFACE
-    // ---------------------------------------------------------
 
     private lateinit var rootLayout: LinearLayout
     private lateinit var contentLayout: LinearLayout
@@ -128,9 +99,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
 
     private var currentTab = "Início"
 
-    // ---------------------------------------------------------
-    // IMPORTAÇÃO DE PDF
-    // ---------------------------------------------------------
+    private lateinit var textToSpeech: TextToSpeech
 
     private val pdfPicker =
         registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
@@ -138,10 +107,6 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 importPdf(uri)
             }
         }
-
-    // ---------------------------------------------------------
-    // CICLO DE VIDA
-    // ---------------------------------------------------------
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -156,9 +121,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         PDFBoxResourceLoader.init(applicationContext)
 
         buildInterface()
-
         textToSpeech = TextToSpeech(this, this)
-
         loadLibrary()
     }
 
@@ -193,7 +156,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     }
 
     // ---------------------------------------------------------
-    // INTERFACE PRINCIPAL
+    // INTERFACE
     // ---------------------------------------------------------
 
     private fun buildInterface() {
@@ -223,7 +186,6 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
 
         header.addView(brand)
         header.addView(tagline)
-
         rootLayout.addView(header)
 
         val navigation = LinearLayout(this).apply {
@@ -232,23 +194,19 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         }
 
         navigation.addView(
-            makeButton("Início") {
-                showTab("Início")
-            },
+            makeButton("Início") { showTab("Início") },
             LinearLayout.LayoutParams(0, dp(44), 1f)
         )
 
         navigation.addView(
-            makeButton("Biblioteca") {
-                showTab("Biblioteca")
-            },
+            makeButton("Biblioteca") { showTab("Biblioteca") },
             LinearLayout.LayoutParams(0, dp(44), 1f)
         )
 
         rootLayout.addView(navigation)
 
         val scrollView = ScrollView(this).apply {
-            fillViewport = true
+            isFillViewport = true
         }
 
         contentLayout = LinearLayout(this).apply {
@@ -268,7 +226,6 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         )
 
         setContentView(rootLayout)
-
         showTab("Início")
     }
 
@@ -313,11 +270,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
             setBackgroundColor(panelColor)
         }
 
-        bookText = makeText(
-            "Nenhum PDF selecionado",
-            18f,
-            true
-        )
+        bookText = makeText("Nenhum PDF selecionado", 18f, true)
 
         rangeText = makeText(
             "Intervalo: Sem limite",
@@ -368,9 +321,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         }
 
         playbackControls.addView(
-            makeButton("−1") {
-                moveChunk(-1)
-            },
+            makeButton("−1") { moveChunk(-1) },
             LinearLayout.LayoutParams(0, dp(48), 1f)
         )
 
@@ -384,9 +335,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         )
 
         playbackControls.addView(
-            makeButton("+1") {
-                moveChunk(1)
-            },
+            makeButton("+1") { moveChunk(1) },
             LinearLayout.LayoutParams(0, dp(48), 1f)
         )
 
@@ -398,11 +347,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
             gravity = Gravity.CENTER_VERTICAL
         }
 
-        speedText = makeText(
-            "Velocidade: ${speechRate}x",
-            14f,
-            true
-        )
+        speedText = makeText("Velocidade: ${speechRate}x", 14f, true)
 
         speedControls.addView(
             speedText,
@@ -410,16 +355,12 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         )
 
         speedControls.addView(
-            makeButton("−") {
-                changeSpeed(-0.1f)
-            },
+            makeButton("−") { changeSpeed(-0.1f) },
             LinearLayout.LayoutParams(dp(48), dp(44))
         )
 
         speedControls.addView(
-            makeButton("+") {
-                changeSpeed(0.1f)
-            },
+            makeButton("+") { changeSpeed(0.1f) },
             LinearLayout.LayoutParams(dp(48), dp(44))
         )
 
@@ -427,9 +368,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         playerPanel.addView(space(8))
 
         playerPanel.addView(
-            makeButton("Escolher voz") {
-                showVoiceDialog()
-            },
+            makeButton("Escolher voz") { showVoiceDialog() },
             matchWidth(dp(44))
         )
 
@@ -439,11 +378,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         )
 
         contentLayout.addView(space(18))
-
-        contentLayout.addView(
-            makeText("Texto do documento", 19f, true)
-        )
-
+        contentLayout.addView(makeText("Texto do documento", 19f, true))
         contentLayout.addView(space(8))
 
         readingText = makeText(
@@ -467,10 +402,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun buildLibrary() {
-        contentLayout.addView(
-            makeText("Sua biblioteca", 23f, true)
-        )
-
+        contentLayout.addView(makeText("Sua biblioteca", 23f, true))
         contentLayout.addView(space(6))
 
         contentLayout.addView(
@@ -498,12 +430,11 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         }
 
         contentLayout.addView(libraryLayout)
-
         refreshLibraryUI()
     }
 
     // ---------------------------------------------------------
-    // IMPORTAÇÃO E EXTRAÇÃO DO PDF
+    // IMPORTAÇÃO E EXTRAÇÃO
     // ---------------------------------------------------------
 
     private fun importPdf(uri: Uri) {
@@ -543,12 +474,14 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
 
                         Toast.makeText(
                             this,
-                            "Não encontrei texto neste PDF. Ele pode ser digitalizado como imagem.",
+                            "Não encontrei texto neste PDF. Ele pode estar digitalizado como imagem.",
                             Toast.LENGTH_LONG
                         ).show()
 
                         return@runOnUiThread
                     }
+
+                    stopSpeech()
 
                     currentFile = destination
                     currentBookName = displayName
@@ -563,16 +496,11 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                     rangeMode = "Sem limite"
                     rangeDescription = "Sem limite"
 
-                    chunks = splitIntoChunks(
-                        documentText,
-                        0
-                    )
+                    chunks = splitIntoChunks(documentText, 0)
 
                     currentChunk = 0
                     currentCharOffset = 0
                     utteranceBaseOffset = 0
-
-                    stopSpeech()
 
                     saveCurrentProgress()
                     showTab("Início")
@@ -636,19 +564,10 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
 
                 val end = output.length
 
-                pages.add(
-                    PageRange(
-                        page = pageNumber,
-                        start = start,
-                        end = end
-                    )
-                )
+                pages.add(PageRange(pageNumber, start, end))
             }
 
-            return ExtractedDocument(
-                text = output.toString(),
-                pages = pages
-            )
+            return ExtractedDocument(output.toString(), pages)
         }
     }
 
@@ -717,7 +636,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     }
 
     // ---------------------------------------------------------
-    // DETECÇÃO AUTOMÁTICA DE CAPÍTULOS
+    // DETECÇÃO DE CAPÍTULOS
     // ---------------------------------------------------------
 
     private fun detectChapters(text: String): List<ChapterRange> {
@@ -735,9 +654,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
             }
         }
 
-        if (detected.isEmpty()) {
-            return emptyList()
-        }
+        if (detected.isEmpty()) return emptyList()
 
         val unique = detected
             .distinctBy { it.second }
@@ -750,11 +667,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 text.length
             }
 
-            ChapterRange(
-                title = item.first,
-                start = item.second,
-                end = end
-            )
+            ChapterRange(item.first, item.second, end)
         }
     }
 
@@ -827,14 +740,11 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
             val firstChapter = chapterRanges[start]
             val lastChapter = chapterRanges[end]
 
-            val description =
-                "Capítulos ${start + 1}–${end + 1}"
-
             applyRange(
                 firstChapter.start,
                 lastChapter.end,
                 "Capítulos",
-                description
+                "Capítulos ${start + 1}–${end + 1}"
             )
         }
     }
@@ -858,14 +768,11 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
             val firstPage = pageRanges[start]
             val lastPage = pageRanges[end]
 
-            val description =
-                "Páginas ${firstPage.page}–${lastPage.page}"
-
             applyRange(
                 firstPage.start,
                 lastPage.end,
                 "Páginas",
-                description
+                "Páginas ${firstPage.page}–${lastPage.page}"
             )
         }
     }
@@ -931,15 +838,8 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     ) {
         if (documentText.isBlank()) return
 
-        val start = requestedStart.coerceIn(
-            0,
-            documentText.length
-        )
-
-        val end = requestedEnd.coerceIn(
-            start,
-            documentText.length
-        )
+        val start = requestedStart.coerceIn(0, documentText.length)
+        val end = requestedEnd.coerceIn(start, documentText.length)
 
         if (end <= start || documentText.substring(start, end).isBlank()) {
             Toast.makeText(
@@ -956,7 +856,6 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
 
         activeStartOffset = start
         activeEndOffset = end
-
         rangeMode = mode
         rangeDescription = description
 
@@ -984,7 +883,6 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         }
 
         restorePosition(targetPosition)
-
         saveCurrentProgress()
         refreshPlayer()
 
@@ -996,7 +894,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     }
 
     // ---------------------------------------------------------
-    // DIVISÃO DO TEXTO EM TRECHOS
+    // DIVISÃO EM TRECHOS
     // ---------------------------------------------------------
 
     private fun splitIntoChunks(
@@ -1014,19 +912,14 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
             var end = min(position + maxLength, text.length)
 
             if (end < text.length) {
-                val paragraphBreak = text.lastIndexOf(
-                    "\n\n",
-                    end
-                )
-
+                val paragraphBreak = text.lastIndexOf("\n\n", end)
                 val sentenceBreak = text.lastIndexOfAny(
                     charArrayOf('.', '!', '?', ';', '\n'),
                     end
                 )
-
                 val spaceBreak = text.lastIndexOf(' ', end)
 
-                val bestBreak = when {
+                end = when {
                     paragraphBreak > position + maxLength / 2 ->
                         paragraphBreak + 2
 
@@ -1037,22 +930,18 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                         spaceBreak + 1
 
                     else -> end
-                }
-
-                end = bestBreak.coerceAtMost(text.length)
+                }.coerceAtMost(text.length)
             }
 
             if (end <= position) {
                 end = min(position + maxLength, text.length)
             }
 
-            val piece = text.substring(position, end)
-
             result.add(
                 SpeechChunk(
-                    text = piece,
-                    start = baseOffset + position,
-                    end = baseOffset + end
+                    text.substring(position, end),
+                    baseOffset + position,
+                    baseOffset + end
                 )
             )
 
@@ -1063,17 +952,13 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     }
 
     // ---------------------------------------------------------
-    // CONTROLE DE POSIÇÃO E PROGRESSO
+    // POSIÇÃO E PROGRESSO
     // ---------------------------------------------------------
 
     private fun currentAbsolutePosition(): Int {
-        if (chunks.isEmpty()) {
-            return activeStartOffset
-        }
+        if (chunks.isEmpty()) return activeStartOffset
 
-        if (currentChunk >= chunks.size) {
-            return activeEndOffset
-        }
+        if (currentChunk >= chunks.size) return activeEndOffset
 
         val chunk = chunks[currentChunk]
 
@@ -1165,10 +1050,9 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
             }
 
             root.put("books", newBooks)
-
             progressFile.writeText(root.toString())
         } catch (_: Exception) {
-            // A falha ao salvar não deve interromper a narração.
+            // Não interrompe a narração caso o salvamento falhe.
         }
     }
 
@@ -1186,20 +1070,6 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
 
     private fun loadLibrary() {
         if (!::progressFile.isInitialized) return
-
-        val root = readProgressJson()
-        val books = root.optJSONArray("books") ?: JSONArray()
-
-        for (i in 0 until books.length()) {
-            val item = books.optJSONObject(i) ?: continue
-            val fileName = item.optString("fileName")
-            val file = File(pdfFolder, fileName)
-
-            if (!file.exists()) {
-                continue
-            }
-        }
-
         refreshLibraryUI()
     }
 
@@ -1310,10 +1180,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                     chunks = splitIntoChunks(documentText, 0)
 
                     restorePosition(
-                        savedPosition.coerceIn(
-                            0,
-                            documentText.length
-                        )
+                        savedPosition.coerceIn(0, documentText.length)
                     )
 
                     showTab("Início")
@@ -1408,7 +1275,6 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                         if (!isPlaying) return@runOnUiThread
 
                         currentChunk++
-
                         currentCharOffset = 0
                         utteranceBaseOffset = 0
 
@@ -1461,11 +1327,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                             absoluteStart - chunk.start
                         ).coerceIn(0, chunk.text.length)
 
-                        highlightText(
-                            absoluteStart,
-                            absoluteEnd
-                        )
-
+                        highlightText(absoluteStart, absoluteEnd)
                         updateProgress()
                     }
                 }
@@ -1561,7 +1423,10 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         val utteranceId = "audi_pdf_$currentUtteranceId"
 
         val params = Bundle().apply {
-            putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, utteranceId)
+            putString(
+                TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID,
+                utteranceId
+            )
         }
 
         textToSpeech.speak(
@@ -1578,12 +1443,10 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         if (chunks.isEmpty()) return
 
         val wasPlaying = isPlaying
-
         stopSpeech()
 
-        currentChunk = (
-            currentChunk + direction
-        ).coerceIn(0, chunks.lastIndex)
+        currentChunk = (currentChunk + direction)
+            .coerceIn(0, chunks.lastIndex)
 
         currentCharOffset = 0
         utteranceBaseOffset = 0
@@ -1601,9 +1464,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     // ---------------------------------------------------------
 
     private fun changeSpeed(amount: Float) {
-        speechRate = (
-            speechRate + amount
-        ).coerceIn(0.5f, 2.0f)
+        speechRate = (speechRate + amount).coerceIn(0.5f, 2.0f)
 
         if (isTtsReady) {
             textToSpeech.setSpeechRate(speechRate)
@@ -1664,7 +1525,6 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
             .setTitle("Escolher voz em português")
             .setItems(names) { _, which ->
                 val wasPlaying = isPlaying
-
                 stopSpeech()
 
                 val selected = voices[which]
@@ -1690,27 +1550,16 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     // ---------------------------------------------------------
 
     private fun highlightText(start: Int, end: Int) {
-        if (!::readingText.isInitialized) return
+        if (!::readingText.isInitialized || documentText.isEmpty()) return
 
-        if (documentText.isEmpty()) return
-
-        val safeStart = start.coerceIn(
-            0,
-            documentText.length
-        )
-
-        val safeEnd = end.coerceIn(
-            safeStart,
-            documentText.length
-        )
+        val safeStart = start.coerceIn(0, documentText.length)
+        val safeEnd = end.coerceIn(safeStart, documentText.length)
 
         val spannable = SpannableString(documentText)
 
         if (safeEnd > safeStart) {
             spannable.setSpan(
-                BackgroundColorSpan(
-                    Color.rgb(41, 105, 65)
-                ),
+                BackgroundColorSpan(Color.rgb(41, 105, 65)),
                 safeStart,
                 safeEnd,
                 Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
@@ -1737,9 +1586,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     private fun refreshPlayer() {
         if (!::bookText.isInitialized) return
 
-        val file = currentFile
-
-        if (file == null || documentText.isBlank()) {
+        if (currentFile == null || documentText.isBlank()) {
             bookText.text = "Nenhum PDF selecionado"
             rangeText.text = "Intervalo: Sem limite"
             progressText.text = "Importe um PDF para começar"
@@ -1813,14 +1660,12 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
             "Sem trechos"
         }
 
-        progressText.text =
-            "$positionDescription • $chunkDescription"
-
+        progressText.text = "$positionDescription • $chunkDescription"
         saveCurrentProgress()
     }
 
     // ---------------------------------------------------------
-    // COMPONENTES AUXILIARES
+    // AUXILIARES DE INTERFACE
     // ---------------------------------------------------------
 
     private fun makeText(
