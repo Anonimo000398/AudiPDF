@@ -7,13 +7,11 @@ import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
-import android.os.SystemClock
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.text.SpannableStringBuilder
 import android.text.Spanned
 import android.text.style.BackgroundColorSpan
-import android.text.style.ForegroundColorSpan
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -101,14 +99,13 @@ class MainActivity : ComponentActivity() {
     private var activeRangeEnd = 0
     private var activeRangeLabel = "Sem limite"
 
-    // O texto é preparado uma vez e reutilizado durante toda a narração.
+    // O documento é preparado uma vez e reutilizado durante a narração.
     private var renderedDocument: SpannableStringBuilder? = null
     private var backgroundHighlightSpan: BackgroundColorSpan? = null
-    private var foregroundHighlightSpan: ForegroundColorSpan? = null
 
-    // Limita a frequência de atualização do destaque.
-    private var lastHighlightUpdateMs = 0L
-    private val highlightUpdateIntervalMs = 100L
+    // Limites do parágrafo que está atualmente destacado.
+    private var highlightedParagraphStart = -1
+    private var highlightedParagraphEnd = -1
 
     private data class SpeechChunk(
         val text: String,
@@ -630,8 +627,8 @@ class MainActivity : ComponentActivity() {
         contentText.setTextColor(muted)
         renderedDocument = null
         backgroundHighlightSpan = null
-        foregroundHighlightSpan = null
-        lastHighlightUpdateMs = 0L
+        highlightedParagraphStart = -1
+        highlightedParagraphEnd = -1
 
         val originalName = getFileName(sourceUri)
 
@@ -1533,36 +1530,37 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // Prepara o documento uma única vez.
+    // Prepara o documento uma única vez para evitar recriá-lo a cada palavra.
     private fun setDocumentTextView(text: String, color: Int) {
         val builder = SpannableStringBuilder(text)
 
         renderedDocument = builder
         backgroundHighlightSpan = null
-        foregroundHighlightSpan = null
-        lastHighlightUpdateMs = 0L
+        highlightedParagraphStart = -1
+        highlightedParagraphEnd = -1
 
         contentText.text = builder
         contentText.setTextColor(color)
     }
 
-    // Remove apenas os spans usados no destaque anterior.
+    // Remove somente o destaque anterior e limpa seus limites.
     private fun removeCurrentHighlight() {
-        val text = renderedDocument ?: return
+        val text = renderedDocument
 
-        backgroundHighlightSpan?.let { span ->
-            if (text.getSpanStart(span) >= 0) text.removeSpan(span)
-        }
-
-        foregroundHighlightSpan?.let { span ->
-            if (text.getSpanStart(span) >= 0) text.removeSpan(span)
+        if (text != null) {
+            backgroundHighlightSpan?.let { span ->
+                if (text.getSpanStart(span) >= 0) {
+                    text.removeSpan(span)
+                }
+            }
         }
 
         backgroundHighlightSpan = null
-        foregroundHighlightSpan = null
+        highlightedParagraphStart = -1
+        highlightedParagraphEnd = -1
     }
 
-    // Atualiza o destaque com intervalo mínimo para reduzir travamentos.
+    // Destaca o parágrafo inteiro e só altera o span quando muda de parágrafo.
     private fun highlightPosition(start: Int, end: Int) {
         val text = renderedDocument ?: return
         if (text.isEmpty()) return
@@ -1571,33 +1569,60 @@ class MainActivity : ComponentActivity() {
         val b = end.coerceIn(a, text.length)
         if (b <= a) return
 
-        val now = SystemClock.uptimeMillis()
-        if (now - lastHighlightUpdateMs < highlightUpdateIntervalMs) return
-        lastHighlightUpdateMs = now
+        // Encontra o início do parágrafo atual.
+        val previousBreak = text.lastIndexOf(
+            "\n\n",
+            (a - 1).coerceAtLeast(0)
+        )
+
+        val paragraphStart = if (previousBreak < 0) {
+            0
+        } else {
+            previousBreak + 2
+        }
+
+        // Encontra o fim do parágrafo atual.
+        val nextBreak = text.indexOf("\n\n", a)
+
+        val paragraphEnd = if (nextBreak < 0) {
+            text.length
+        } else {
+            nextBreak
+        }
+
+        if (paragraphEnd <= paragraphStart) return
+
+        // Se a voz continua no mesmo parágrafo, não atualiza a interface.
+        if (paragraphStart == highlightedParagraphStart &&
+            paragraphEnd == highlightedParagraphEnd
+        ) {
+            return
+        }
 
         removeCurrentHighlight()
 
-        // Um único span reduz o trabalho de atualização visual.
         val backgroundSpan = BackgroundColorSpan(highlight)
 
         text.setSpan(
             backgroundSpan,
-            a,
-            b,
+            paragraphStart,
+            paragraphEnd,
             Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
         )
 
         backgroundHighlightSpan = backgroundSpan
-        foregroundHighlightSpan = null
+        highlightedParagraphStart = paragraphStart
+        highlightedParagraphEnd = paragraphEnd
 
-        // Não reatribui o documento inteiro: o span atualiza a marcação.
+        // Não reatribui o documento inteiro ao TextView.
         contentText.invalidate()
 
-        readingIndicator.text = "■  LENDO AGORA"
+        readingIndicator.text = "■  LENDO PARÁGRAFO"
     }
 
     private fun clearHighlight() {
         removeCurrentHighlight()
+
         if (renderedDocument != null) {
             contentText.invalidate()
         }
