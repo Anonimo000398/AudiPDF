@@ -2,7 +2,6 @@ package com.audipdf.app
 
 import android.app.AlertDialog
 import android.graphics.Color
-import android.graphics.Rect
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
@@ -10,7 +9,7 @@ import android.os.Bundle
 import android.os.SystemClock
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
-import android.text.SpannableStringBuilder
+import android.text.Spannable
 import android.text.Spanned
 import android.text.style.BackgroundColorSpan
 import android.text.style.ForegroundColorSpan
@@ -112,15 +111,21 @@ class MainActivity : ComponentActivity() {
     private var activeRangeEnd = 0
     private var activeRangeLabel = "Sem limite"
 
-    // Preferência persistente da marcação por linha.
+    // Preferência persistente da marcação por linha (ligada/desligada).
     private var lineHighlightEnabled = true
 
-    private var renderedDocument: SpannableStringBuilder? = null
+    // Texto atualmente exibido na área de leitura (somente o trecho atual).
+    // É o MESMO objeto que o TextView usa, então os spans aparecem na tela.
+    private var renderedDocument: Spannable? = null
     private var backgroundHighlightSpan: BackgroundColorSpan? = null
     private var foregroundHighlightSpan: ForegroundColorSpan? = null
 
     private var highlightedLineStart = -1
     private var highlightedLineEnd = -1
+
+    // Qual trecho está desenhado na tela agora (-1 = nenhum / mensagem).
+    private var shownChunkStart = -1
+    private var shownChunkEnd = -1
 
     private data class SpeechChunk(
         val text: String,
@@ -527,12 +532,13 @@ class MainActivity : ComponentActivity() {
 
         reading.addView(readingIndicator, bottomMargin(14))
 
+        // Importante: o texto NÃO é selecionável de propósito. Texto selecionável
+        // que muda a cada trecho é fonte conhecida de travamentos e crashes.
         contentText = makeText(
             "Importe um PDF para visualizar o texto organizado aqui.",
             15f,
             muted
         ).apply {
-            setTextIsSelectable(true)
             setLineSpacing(dp(7).toFloat(), 1.08f)
         }
 
@@ -665,16 +671,18 @@ class MainActivity : ComponentActivity() {
 
                                 val chunk = chunks[currentChunk]
 
-                                val a = (
-                                    chunk.start + utteranceBaseOffset + start
-                                ).coerceIn(0, documentText.length)
+                                // Posição dentro do TRECHO atual (não do livro inteiro).
+                                val localStart = (
+                                    utteranceBaseOffset + start
+                                ).coerceIn(0, chunk.text.length)
 
                                 currentCharOffset = (
                                     utteranceBaseOffset + end
                                 ).coerceIn(0, chunk.text.length)
 
                                 if (lineHighlightEnabled) {
-                                    highlightPosition(a)
+                                    showChunkText()
+                                    highlightPosition(localStart)
                                 }
 
                                 // Evita gravar o arquivo JSON a cada palavra.
@@ -765,6 +773,8 @@ class MainActivity : ComponentActivity() {
         foregroundHighlightSpan = null
         highlightedLineStart = -1
         highlightedLineEnd = -1
+        shownChunkStart = -1
+        shownChunkEnd = -1
 
         val originalName = getFileName(sourceUri)
 
@@ -831,12 +841,12 @@ class MainActivity : ComponentActivity() {
                     } else {
                         chunks = splitIntoChunks(documentText)
 
-                        setDocumentTextView(documentText, white)
-
                         statusText.text =
                             "PDF pronto • ${documentText.split(Regex("\\s+")).size} palavras"
 
                         readingIndicator.text = "■  PRONTO PARA LER"
+
+                        // updateProgress() também desenha o trecho atual na tela.
                         updateProgress()
                         clearHighlight()
                         saveCurrentProgress(force = true)
@@ -1306,7 +1316,11 @@ class MainActivity : ComponentActivity() {
                 android.R.attr.progressBarStyleHorizontal
             ).apply {
                 max = 100
-                progress = percent.coerceIn(0, 100)
+
+                // CORREÇÃO DO ERRO DE BUILD: aqui dentro, "progress" sozinho
+                // apontava para a variável local BookProgress? acima.
+                // "this.progress" é a propriedade da barra de progresso.
+                this.progress = percent.coerceIn(0, 100)
 
                 progressTintList =
                     android.content.res.ColorStateList.valueOf(green)
@@ -1399,12 +1413,16 @@ class MainActivity : ComponentActivity() {
                     lastProgressSaveTime = 0L
                     fileNameText.text = currentBookName
 
-                    setDocumentTextView(
-                        documentText,
-                        if (documentText.isBlank()) muted else white
-                    )
+                    // Garante que o trecho certo será redesenhado.
+                    shownChunkStart = -1
+                    shownChunkEnd = -1
 
                     if (documentText.isBlank()) {
+                        setDocumentTextView(
+                            "Este PDF não possui texto extraível.",
+                            muted
+                        )
+
                         statusText.text =
                             "Este PDF não possui texto extraível."
                         readingIndicator.text = "■  SEM TEXTO DISPONÍVEL"
@@ -1414,6 +1432,7 @@ class MainActivity : ComponentActivity() {
                         readingIndicator.text = "■  PRONTO PARA CONTINUAR"
                     }
 
+                    // updateProgress() também desenha o trecho atual na tela.
                     updateProgress()
                     clearHighlight()
                     saveCurrentProgress(force = true)
@@ -1463,16 +1482,6 @@ class MainActivity : ComponentActivity() {
         val now = SystemClock.elapsedRealtime()
 
         // Só salva durante a fala após avanço relevante ou intervalo mínimo.
-        if (
-            !force &&
-            lastSavedPercent == percent &&
-            lastSavedOffset >= 0 &&
-            abs(absolute - lastSavedOffset) < 300 &&
-            now - lastProgressSaveTime < 1500L
-        ) {
-            return
-        }
-
         if (
             !force &&
             lastSavedOffset >= 0 &&
@@ -1761,6 +1770,9 @@ class MainActivity : ComponentActivity() {
 
         engine.setSpeechRate(speechRate)
 
+        // Garante que o trecho certo já está na tela antes da fala começar.
+        updateProgress()
+
         val result = engine.speak(
             chunk.text.substring(base),
             TextToSpeech.QUEUE_FLUSH,
@@ -1776,8 +1788,6 @@ class MainActivity : ComponentActivity() {
             readingIndicator.text = "■  ERRO NA NARRAÇÃO"
             return
         }
-
-        updateProgress()
     }
 
     private fun moveChunk(direction: Int) {
@@ -1853,12 +1863,8 @@ class MainActivity : ComponentActivity() {
                 "■  PRONTO PARA LER"
             }
         } else if (isPlaying && currentChunk in chunks.indices) {
-            val chunk = chunks[currentChunk]
-            val position = (
-                chunk.start + currentCharOffset
-            ).coerceIn(0, documentText.length)
-
-            highlightPosition(position)
+            showChunkText()
+            highlightPosition(currentCharOffset)
         }
 
         toast(
@@ -1880,17 +1886,40 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * Mostra um texto qualquer (mensagem ou trecho) na área de leitura.
+     * Usa BufferType.SPANNABLE e pega de volta o objeto que o TextView
+     * realmente usa; é nele que os spans de destaque precisam ser aplicados.
+     */
     private fun setDocumentTextView(text: String, color: Int) {
-        val builder = SpannableStringBuilder(text)
+        contentText.setText(text, TextView.BufferType.SPANNABLE)
+        contentText.setTextColor(color)
 
-        renderedDocument = builder
+        renderedDocument = contentText.text as? Spannable
         backgroundHighlightSpan = null
         foregroundHighlightSpan = null
         highlightedLineStart = -1
         highlightedLineEnd = -1
+        shownChunkStart = -1
+        shownChunkEnd = -1
+    }
 
-        contentText.text = builder
-        contentText.setTextColor(color)
+    /**
+     * Desenha na tela SOMENTE o trecho atual (no máximo ~1000 caracteres).
+     * Antes o livro inteiro ficava dentro de um único TextView, o que deixava
+     * o app pesado, travando e depois fechando durante a narração.
+     */
+    private fun showChunkText() {
+        if (chunks.isEmpty()) return
+
+        val chunk = chunks[currentChunk.coerceIn(0, chunks.lastIndex)]
+
+        if (chunk.start == shownChunkStart && chunk.end == shownChunkEnd) return
+
+        setDocumentTextView(chunk.text, white)
+
+        shownChunkStart = chunk.start
+        shownChunkEnd = chunk.end
     }
 
     private fun removeCurrentHighlight() {
@@ -1918,8 +1947,7 @@ class MainActivity : ComponentActivity() {
 
     /**
      * Destaca somente a linha visual do TextView onde está o caractere narrado.
-     * A linha visual é calculada pelo layout real, considerando a largura da tela
-     * e a quebra automática de texto.
+     * "position" é a posição dentro do TRECHO exibido na tela.
      */
     private fun highlightPosition(position: Int) {
         if (!lineHighlightEnabled) return
@@ -1928,6 +1956,10 @@ class MainActivity : ComponentActivity() {
         if (text.isEmpty()) return
 
         val layout = contentText.layout ?: return
+
+        // Se o layout ainda é de um texto antigo, ignora esta palavra.
+        if (layout.text.length != text.length) return
+
         val offset = position.coerceIn(0, text.length)
 
         val safeOffset = if (offset == text.length && offset > 0) {
@@ -1937,7 +1969,7 @@ class MainActivity : ComponentActivity() {
         }
 
         val lineNumber = layout.getLineForOffset(safeOffset)
-        var lineStart = layout.getLineStart(lineNumber).coerceIn(0, text.length)
+        val lineStart = layout.getLineStart(lineNumber).coerceIn(0, text.length)
         var lineEnd = layout.getLineEnd(lineNumber).coerceIn(lineStart, text.length)
 
         // Não pinta a quebra de linha no fim da linha visual.
@@ -1950,6 +1982,7 @@ class MainActivity : ComponentActivity() {
 
         if (lineEnd <= lineStart) return
 
+        // Mesma linha de antes: nada a fazer (evita trabalho a cada palavra).
         if (
             lineStart == highlightedLineStart &&
             lineEnd == highlightedLineEnd
@@ -1983,26 +2016,6 @@ class MainActivity : ComponentActivity() {
 
         contentText.invalidate()
         readingIndicator.text = "■  LENDO LINHA"
-
-        // Mantém a linha atual visível sem solicitar rolagem a cada palavra.
-        val lineTop = layout.getLineTop(lineNumber)
-        val lineBottom = layout.getLineBottom(lineNumber)
-        val visibleRect = Rect()
-
-        if (
-            contentText.getLocalVisibleRect(visibleRect) &&
-            (lineTop < visibleRect.top || lineBottom > visibleRect.bottom)
-        ) {
-            contentText.requestRectangleOnScreen(
-                Rect(
-                    0,
-                    lineTop,
-                    contentText.width,
-                    lineBottom
-                ),
-                false
-            )
-        }
     }
 
     private fun clearHighlight() {
@@ -2028,6 +2041,9 @@ class MainActivity : ComponentActivity() {
 
         seekText.text =
             "Trecho ${minOf(currentChunk + 1, chunks.size)} de ${chunks.size}"
+
+        // Mantém a área de leitura sempre mostrando o trecho atual.
+        showChunkText()
     }
 
     private fun getFileName(uri: Uri): String {
