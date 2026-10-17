@@ -30,6 +30,8 @@ import com.google.android.gms.ads.AdView
 import com.google.android.gms.ads.MobileAds
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.text.PDFTextStripper
@@ -203,8 +205,17 @@ class MainActivity : ComponentActivity() {
 
         PDFBoxResourceLoader.init(applicationContext)
 
-        // Inicia o SDK de anúncios fora da thread principal.
-        Thread { MobileAds.initialize(this) {} }.start()
+        // Inicia o SDK de anúncios fora da thread principal e só pede o
+        // banner DEPOIS que a inicialização terminar.
+        Thread {
+            MobileAds.initialize(this) {
+                runOnUiThread {
+                    if (!isDestroyed) {
+                        adView?.loadAd(AdRequest.Builder().build())
+                    }
+                }
+            }
+        }.start()
 
         buildInterface()
         initializeVoice()
@@ -326,7 +337,13 @@ class MainActivity : ComponentActivity() {
         )
 
         setContentView(screen)
-        banner.loadAd(AdRequest.Builder().build())
+
+        // Mantém o banner acima da barra de navegação (Android 15+).
+        ViewCompat.setOnApplyWindowInsetsListener(screen) { v, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            v.setPadding(0, 0, 0, bars.bottom)
+            insets
+        }
     }
 
     private fun buildHome() {
