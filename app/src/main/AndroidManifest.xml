@@ -12,10 +12,10 @@
         android:theme="@android:style/Theme.Material.NoActionBar"
         android:supportsRtl="true">
 
-        <!-- ID de app de TESTE do AdMob. Troque pelo seu ID real antes de lançar. -->
+        <!-- ID do app AdMob -->
         <meta-data
             android:name="com.google.android.gms.ads.APPLICATION_ID"
-            android:value="ca-app-pub-3940256099942544~3347511713" />
+            android:value="ca-app-pub-9659561347539498~3695103279" />
 
         <activity
             android:name=".MainActivity"
