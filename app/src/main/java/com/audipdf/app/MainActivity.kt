@@ -1,9 +1,5 @@
 package com.audipdf.app
 
-import com.google.android.gms.ads.AdRequest
-import com.google.android.gms.ads.AdSize
-import com.google.android.gms.ads.AdView
-import com.google.android.gms.ads.MobileAds
 import android.app.AlertDialog
 import android.graphics.Color
 import android.graphics.Typeface
@@ -28,6 +24,10 @@ import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
+import com.google.android.gms.ads.AdRequest
+import com.google.android.gms.ads.AdSize
+import com.google.android.gms.ads.AdView
+import com.google.android.gms.ads.MobileAds
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
@@ -53,6 +53,9 @@ class MainActivity : ComponentActivity() {
     private val highlightText = Color.rgb(8, 20, 12)
 
     private val executor = Executors.newSingleThreadExecutor()
+
+    // Banner de anúncio (AdMob) fixo no rodapé da tela.
+    private var adView: AdView? = null
 
     private lateinit var homeContent: LinearLayout
     private lateinit var libraryContent: LinearLayout
@@ -200,6 +203,9 @@ class MainActivity : ComponentActivity() {
 
         PDFBoxResourceLoader.init(applicationContext)
 
+        // Inicia o SDK de anúncios fora da thread principal.
+        Thread { MobileAds.initialize(this) {} }.start()
+
         buildInterface()
         initializeVoice()
         refreshLibrary()
@@ -284,7 +290,43 @@ class MainActivity : ComponentActivity() {
         root.addView(libraryContent)
 
         scroll.addView(root)
-        setContentView(scroll)
+
+        // Tela = conteúdo rolável em cima + banner de anúncio fixo embaixo.
+        val screen = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(bg)
+        }
+
+        screen.addView(
+            scroll,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+            )
+        )
+
+        val banner = AdView(this).apply {
+            setAdSize(AdSize.BANNER)
+
+            // ID de TESTE de banner. Troque pelo seu ID real antes de lançar.
+            adUnitId = "ca-app-pub-3940256099942544/6300978111"
+        }
+
+        adView = banner
+
+        screen.addView(
+            banner,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                gravity = Gravity.CENTER_HORIZONTAL
+            }
+        )
+
+        setContentView(screen)
+        banner.loadAd(AdRequest.Builder().build())
     }
 
     private fun buildHome() {
@@ -2329,6 +2371,8 @@ class MainActivity : ComponentActivity() {
         tts?.shutdown()
         tts = null
         executor.shutdown()
+        adView?.destroy()
+        adView = null
         super.onDestroy()
     }
 }
