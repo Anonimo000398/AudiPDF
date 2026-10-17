@@ -19,7 +19,6 @@ import android.view.ViewGroup
 import android.widget.Button
 import android.widget.ImageView
 import android.widget.LinearLayout
-import android.widget.NumberPicker
 import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.SeekBar
@@ -946,7 +945,7 @@ class MainActivity : ComponentActivity() {
 
         val options = arrayOf(
             "Sem limite (documento inteiro)",
-            "Selecionar intervalo de páginas",
+            "Selecionar intervalo de trechos",
             "Selecionar intervalo de capítulos"
         )
 
@@ -960,7 +959,7 @@ class MainActivity : ComponentActivity() {
                         "Sem limite"
                     )
 
-                    1 -> showPageRangePicker()
+                    1 -> showChunkRangePicker()
                     2 -> showChapterRangePicker()
                 }
             }
@@ -968,82 +967,45 @@ class MainActivity : ComponentActivity() {
             .show()
     }
 
-    private fun showPageRangePicker() {
-        val totalPages = pageRanges.size
-
-        if (totalPages == 0) {
-            toast("Não foi possível identificar as páginas.")
+    private fun showChunkRangePicker() {
+        if (documentText.isBlank()) {
+            toast("Importe um PDF com texto primeiro.")
             return
         }
 
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(24), dp(12), dp(24), dp(8))
+        // Trechos do documento inteiro, independente do intervalo ativo.
+        val allChunks = splitIntoChunks(documentText)
+
+        if (allChunks.isEmpty()) {
+            toast("Não há trechos para selecionar.")
+            return
         }
 
-        container.addView(makeText("Página inicial", 14f, white, true))
-
-        val startPicker = NumberPicker(this).apply {
-            minValue = 1
-            maxValue = totalPages
-            value = 1
-            wrapSelectorWheel = false
-        }
-
-        container.addView(
-            startPicker,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(52)
-            )
-        )
-
-        container.addView(
-            makeText("Página final", 14f, white, true).apply {
-                setPadding(0, dp(12), 0, 0)
-            }
-        )
-
-        val endPicker = NumberPicker(this).apply {
-            minValue = 1
-            maxValue = totalPages
-            value = totalPages
-            wrapSelectorWheel = false
-        }
-
-        container.addView(
-            endPicker,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(52)
-            )
-        )
-
-        startPicker.setOnValueChangedListener { _, newValue, _ ->
-            if (endPicker.value < newValue) endPicker.value = newValue
-        }
-
-        endPicker.setOnValueChangedListener { _, newValue, _ ->
-            if (startPicker.value > newValue) startPicker.value = newValue
-        }
-
-        AlertDialog.Builder(this)
-            .setTitle("Selecionar páginas")
-            .setView(container)
-            .setPositiveButton("Aplicar") { _, _ ->
-                val firstPage = startPicker.value
-                val lastPage = endPicker.value.coerceAtLeast(firstPage)
-                val first = pageRanges[firstPage - 1]
-                val last = pageRanges[lastPage - 1]
+        showIntervalPicker(
+            title = "Selecionar trechos",
+            itemName = "Trecho",
+            count = allChunks.size,
+            describeStart = { index ->
+                "Começa em: “" + startPreview(allChunks[index].text) + "”"
+            },
+            describeEnd = { index ->
+                "Termina em: “" + endPreview(allChunks[index].text) + "”"
+            },
+            onApply = { firstIndex, lastIndex ->
+                val first = allChunks[firstIndex]
+                val last = allChunks[lastIndex.coerceAtLeast(firstIndex)]
 
                 applyReadingRange(
                     first.start,
                     last.end,
-                    "Páginas $firstPage–$lastPage"
+                    if (firstIndex == lastIndex) {
+                        "Trecho ${firstIndex + 1}"
+                    } else {
+                        "Trechos ${firstIndex + 1}–${lastIndex + 1}"
+                    }
                 )
             }
-            .setNegativeButton("Cancelar", null)
-            .show()
+        )
     }
 
     private fun showChapterRangePicker() {
@@ -1053,10 +1015,10 @@ class MainActivity : ComponentActivity() {
                 .setMessage(
                     "Não encontrei títulos no formato esperado, como " +
                         "\"Capítulo 1\", \"Chapter 1\" ou \"Parte 1\".\n\n" +
-                        "Você ainda pode selecionar um intervalo de páginas."
+                        "Você ainda pode selecionar um intervalo de trechos."
                 )
-                .setPositiveButton("Selecionar páginas") { _, _ ->
-                    showPageRangePicker()
+                .setPositiveButton("Selecionar trechos") { _, _ ->
+                    showChunkRangePicker()
                 }
                 .setNegativeButton("Fechar", null)
                 .show()
@@ -1064,71 +1026,15 @@ class MainActivity : ComponentActivity() {
             return
         }
 
-        val titles = chapterRanges.mapIndexed { index, chapter ->
-            "${index + 1}. ${chapter.title}"
-        }.toTypedArray()
-
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(24), dp(12), dp(24), dp(8))
-        }
-
-        container.addView(makeText("Capítulo inicial", 14f, white, true))
-
-        val startPicker = NumberPicker(this).apply {
-            minValue = 1
-            maxValue = chapterRanges.size
-            value = 1
-            displayedValues = titles
-            wrapSelectorWheel = false
-        }
-
-        container.addView(
-            startPicker,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(60)
-            )
-        )
-
-        container.addView(
-            makeText("Capítulo final", 14f, white, true).apply {
-                setPadding(0, dp(12), 0, 0)
-            }
-        )
-
-        val endPicker = NumberPicker(this).apply {
-            minValue = 1
-            maxValue = chapterRanges.size
-            value = chapterRanges.size
-            displayedValues = titles
-            wrapSelectorWheel = false
-        }
-
-        container.addView(
-            endPicker,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(60)
-            )
-        )
-
-        startPicker.setOnValueChangedListener { _, newValue, _ ->
-            if (endPicker.value < newValue) endPicker.value = newValue
-        }
-
-        endPicker.setOnValueChangedListener { _, newValue, _ ->
-            if (startPicker.value > newValue) startPicker.value = newValue
-        }
-
-        AlertDialog.Builder(this)
-            .setTitle("Selecionar capítulos")
-            .setView(container)
-            .setPositiveButton("Aplicar") { _, _ ->
-                val firstIndex = startPicker.value - 1
-                val lastIndex = endPicker.value - 1
+        showIntervalPicker(
+            title = "Selecionar capítulos",
+            itemName = "Capítulo",
+            count = chapterRanges.size,
+            describeStart = { index -> chapterRanges[index].title },
+            describeEnd = { index -> chapterRanges[index].title },
+            onApply = { firstIndex, lastIndex ->
                 val first = chapterRanges[firstIndex]
-                val last = chapterRanges[lastIndex]
+                val last = chapterRanges[lastIndex.coerceAtLeast(firstIndex)]
 
                 applyReadingRange(
                     first.start,
@@ -1140,8 +1046,275 @@ class MainActivity : ComponentActivity() {
                     }
                 )
             }
-            .setNegativeButton("Cancelar", null)
-            .show()
+        )
+    }
+
+    private fun startPreview(text: String, max: Int = 90): String {
+        val flat = text.replace(Regex("\\s+"), " ").trim()
+
+        return if (flat.length <= max) {
+            flat
+        } else {
+            flat.take(max).trimEnd() + "…"
+        }
+    }
+
+    private fun endPreview(text: String, max: Int = 90): String {
+        val flat = text.replace(Regex("\\s+"), " ").trim()
+
+        return if (flat.length <= max) {
+            flat
+        } else {
+            "…" + flat.takeLast(max).trimStart()
+        }
+    }
+
+    /**
+     * Janela grande para escolher "de onde até onde" ouvir.
+     * Em vez de NumberPicker (pequeno e instável), usa barra deslizante grande
+     * e botões -10 / -1 / +1 / +10, com uma prévia do texto escolhido.
+     */
+    private fun showIntervalPicker(
+        title: String,
+        itemName: String,
+        count: Int,
+        describeStart: (Int) -> String,
+        describeEnd: (Int) -> String,
+        onApply: (Int, Int) -> Unit
+    ) {
+        if (count <= 0) {
+            toast("Não há nada para selecionar.")
+            return
+        }
+
+        lateinit var dialog: AlertDialog
+        lateinit var endSelector: IndexSelector
+
+        val startSelector = IndexSelector(
+            "INÍCIO",
+            itemName,
+            count,
+            describeStart,
+            0
+        ) { newStart ->
+            if (endSelector.index < newStart) {
+                endSelector.moveTo(newStart, false)
+            }
+        }
+
+        endSelector = IndexSelector(
+            "FIM",
+            itemName,
+            count,
+            describeEnd,
+            count - 1
+        ) { newEnd ->
+            if (startSelector.index > newEnd) {
+                startSelector.moveTo(newEnd, false)
+            }
+        }
+
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(22), dp(20), dp(22), dp(18))
+        }
+
+        container.addView(makeText(title, 21f, white, true))
+
+        container.addView(
+            makeText(
+                "Escolha de onde até onde você quer ouvir.",
+                13f,
+                muted
+            ).apply {
+                setPadding(0, dp(6), 0, dp(18))
+            }
+        )
+
+        container.addView(startSelector.view)
+
+        container.addView(
+            View(this).apply {
+                setBackgroundColor(Color.rgb(48, 55, 49))
+            },
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(1)
+            ).apply {
+                topMargin = dp(18)
+                bottomMargin = dp(18)
+            }
+        )
+
+        container.addView(endSelector.view)
+
+        val actions = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(22), 0, 0)
+        }
+
+        actions.addView(
+            makeButton("Cancelar", Color.rgb(40, 47, 42), white) {
+                dialog.dismiss()
+            },
+            LinearLayout.LayoutParams(0, dp(52), 1f).apply {
+                marginEnd = dp(8)
+            }
+        )
+
+        actions.addView(
+            makeButton("Aplicar", green, Color.rgb(8, 20, 12)) {
+                val first = startSelector.index
+                val last = endSelector.index.coerceAtLeast(first)
+
+                dialog.dismiss()
+                onApply(first, last)
+            },
+            LinearLayout.LayoutParams(0, dp(52), 1f)
+        )
+
+        container.addView(actions)
+
+        val scroll = ScrollView(this).apply {
+            addView(container)
+        }
+
+        dialog = AlertDialog.Builder(this)
+            .setView(scroll)
+            .create()
+
+        dialog.window?.setBackgroundDrawable(
+            rounded(Color.rgb(28, 33, 29), 22)
+        )
+
+        dialog.show()
+
+        dialog.window?.setLayout(
+            (resources.displayMetrics.widthPixels * 0.94f).toInt(),
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+    }
+
+    /**
+     * Um seletor de posição: título, número grande, prévia do texto,
+     * barra deslizante grande e botões de ajuste fino.
+     */
+    private inner class IndexSelector(
+        label: String,
+        private val itemName: String,
+        private val count: Int,
+        private val describe: (Int) -> String,
+        initial: Int,
+        private val onChanged: (Int) -> Unit
+    ) {
+        val view = LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+
+        var index: Int = initial.coerceIn(0, count - 1)
+            private set
+
+        private val valueText = makeText("", 22f, white, true)
+        private val descText = makeText("", 13f, muted)
+        private val seek = SeekBar(this@MainActivity)
+
+        init {
+            view.addView(makeText(label, 11f, green, true))
+
+            view.addView(
+                valueText.apply {
+                    setPadding(0, dp(6), 0, 0)
+                }
+            )
+
+            view.addView(
+                descText.apply {
+                    setPadding(0, dp(4), 0, dp(4))
+                }
+            )
+
+            seek.max = (count - 1).coerceAtLeast(1)
+            seek.progress = index
+            seek.isEnabled = count > 1
+            seek.progressTintList =
+                android.content.res.ColorStateList.valueOf(green)
+            seek.thumbTintList =
+                android.content.res.ColorStateList.valueOf(green)
+            seek.setPadding(dp(10), dp(14), dp(10), dp(14))
+
+            seek.setOnSeekBarChangeListener(
+                object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(
+                        s: SeekBar?,
+                        p: Int,
+                        fromUser: Boolean
+                    ) {
+                        if (fromUser) moveTo(p, true)
+                    }
+
+                    override fun onStartTrackingTouch(s: SeekBar?) {}
+
+                    override fun onStopTrackingTouch(s: SeekBar?) {}
+                }
+            )
+
+            view.addView(
+                seek,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    dp(52)
+                )
+            )
+
+            val steps = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+            }
+
+            val stepOptions = listOf(
+                "−10" to -10,
+                "−1" to -1,
+                "+1" to 1,
+                "+10" to 10
+            )
+
+            stepOptions.forEachIndexed { position, option ->
+                steps.addView(
+                    makeButton(
+                        option.first,
+                        Color.rgb(40, 47, 42),
+                        white
+                    ) {
+                        moveTo(index + option.second, true)
+                    },
+                    LinearLayout.LayoutParams(0, dp(48), 1f).apply {
+                        if (position < stepOptions.lastIndex) {
+                            marginEnd = dp(6)
+                        }
+                    }
+                )
+            }
+
+            view.addView(steps)
+
+            refreshTexts()
+        }
+
+        fun moveTo(newIndex: Int, notify: Boolean) {
+            val safe = newIndex.coerceIn(0, count - 1)
+
+            index = safe
+
+            if (seek.progress != safe) seek.progress = safe
+
+            refreshTexts()
+
+            if (notify) onChanged(safe)
+        }
+
+        private fun refreshTexts() {
+            valueText.text = "$itemName ${index + 1} de $count"
+            descText.text = describe(index)
+        }
     }
 
     private fun applyReadingRange(
