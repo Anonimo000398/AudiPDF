@@ -24,9 +24,11 @@ import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
+import com.google.android.gms.ads.AdListener
 import com.google.android.gms.ads.AdRequest
 import com.google.android.gms.ads.AdSize
 import com.google.android.gms.ads.AdView
+import com.google.android.gms.ads.LoadAdError
 import com.google.android.gms.ads.MobileAds
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
@@ -322,6 +324,18 @@ class MainActivity : ComponentActivity() {
 
             // ID do bloco de banner (AdMob).
             adUnitId = "ca-app-pub-9659561347539498/6021883718"
+
+            // DIAGNÓSTICO: mostra na tela se o anúncio carregou ou falhou.
+            // Pode ser removido depois que os anúncios estiverem funcionando.
+            adListener = object : AdListener() {
+                override fun onAdLoaded() {
+                    toast("Anúncio carregado")
+                }
+
+                override fun onAdFailedToLoad(error: LoadAdError) {
+                    toast("Anúncio falhou: código ${error.code} - ${error.message}")
+                }
+            }
         }
 
         adView = banner
