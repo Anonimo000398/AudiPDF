@@ -320,8 +320,8 @@ class MainActivity : ComponentActivity() {
         val banner = AdView(this).apply {
             setAdSize(AdSize.BANNER)
 
-            // ID de TESTE de banner. Troque pelo seu ID real antes de lançar.
-            adUnitId = "ca-app-pub-3940256099942544/6300978111"
+            // ID do bloco de banner (AdMob).
+            adUnitId = "ca-app-pub-9659561347539498/6021883718"
         }
 
         adView = banner
